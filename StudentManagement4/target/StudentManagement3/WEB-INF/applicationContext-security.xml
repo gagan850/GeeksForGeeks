@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+xmlns:security="http://www.springframework.org/schema/security"
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+xmlns:mongo="http://www.springframework.org/schema/data/mongo"
+xsi:schemaLocation="http://www.springframework.org/schema/beans
+http://www.springframework.org/schema/beans/spring-beans-3.0.xsd
+http://www.springframework.org/schema/security
+http://www.springframework.org/schema/security/spring-security-3.1.xsd
+http://www.springframework.org/schema/data/mongo http://www.springframework.org/schema/data/mongo/spring-mongo-1.0.xsd">
+
+
+<!-- Spring security Authentication Manager -->
+<security:authentication-manager>
+<security:authentication-provider user-service-ref="userDetailsService"/>
+</security:authentication-manager>
+
+<!-- UserDetailService -->
+<bean id="userDetailsService"
+class="com.management.student.service.UserDetailsService">
+<property name="userService">
+         <bean id="userService" class="com.management.student.service.UserService">
+         <property name="userDao">
+                  <bean id="userDao" class="com.management.student.dao.UserDao">
+                  <property name="jdbcTemplate">
+	<bean id="mongoTemplate" class="org.springframework.data.mongodb.core.MongoTemplate">
+     <constructor-arg ref="mongo"/>
+     <constructor-arg value="StudentManagement"/>
+   </bean>
+   </property>
+         
+         </bean>
+       </property>
+       </bean></property>
+</bean>
+                  	<mongo:mongo host="localhost" port="27017"/>
+
+
+<security:http auto-config="true" use-expressions="true">
+<security:form-login login-page="/login"  default-target-url="/students/list" authentication-failure-url="/fail2login"/>
+ <!-- 
+<security:http-basic/>
+-->
+<security:intercept-url pattern="/students/**/*" access="hasAnyRole('ROLE_ADMIN','ROLE_USER')" />
+
+<!-- Session Management -->
+<security:session-management invalid-session-url="/login">
+<security:concurrency-control max-sessions="1"  />
+<!-- error-if-maximum-exceeded="true" -->
+</security:session-management>
+
+</security:http>
+
+
+
+<bean id="serverErrorHandler" class="com.management.student.configuration.AuthenticationFailure"/>
+</beans>

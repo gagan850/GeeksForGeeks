@@ -1,0 +1,15 @@
+create or replace PACKAGE FETCH_UPDATED_BDAF_TREE
+AS
+  PROCEDURE FETCH_PARENTS_OF_INFLUENCES(
+      directInfluenceList    IN lv_nested_node_tbl,
+      strategicInfluenceList IN lv_nested_node_tbl,
+      marketList             IN lv_nested_node_tbl,
+      snapDate               IN VARCHAR2,
+      out_cursor OUT SYS_REFCURSOR);
+  PROCEDURE FETCH_UPDATED_SAVED_TREE_STATE(
+      branchNodeList IN lv_nested_node_tbl,
+      marketNodeList IN lv_nested_node_tbl,
+      snapDate       IN VARCHAR2,
+      out_cursor OUT SYS_REFCURSOR);
+END FETCH_UPDATED_BDAF_TREE;
+/

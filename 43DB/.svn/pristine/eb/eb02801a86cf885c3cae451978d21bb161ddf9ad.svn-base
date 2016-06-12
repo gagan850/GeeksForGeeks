@@ -1,0 +1,1848 @@
+create or replace PACKAGE BODY COMPUTE_AVAIL_SEAT
+AS
+ /***************************************************************************************************
+  * Define Variables
+  ***************************************************************************************************/
+
+  g_legComp_snapDt       DATE;
+  g_legComp_isLive       NUMBER;
+  jobIdCondition VARCHAR2(100);
+  g_segCls_snapDt        DATE;
+  g_segCls_isLive        NUMBER;
+  g_bidPrc_snapDt        DATE;
+  g_bidPrc_isLive        NUMBER;
+  g_sqlcode_snapdt varchar2(20);
+   g_sqlerrm_snapdt varchar2(100);
+   g_remainingodicount NUMBER;
+   g_countOdiSql        Varchar2(1000);
+
+PROCEDURE COMPUTE_AVAIL_SEAT_LEG_CNT_1(
+    SNAP_DATE IN VARCHAR2,
+    TABLE_NAME IN VARCHAR2,
+    JOB_ID IN NUMBER,
+    prc_RETURN_INFO OUT VARCHAR2)
+AS
+
+  /***************************************************************************************************
+  * Define Variables
+  ***************************************************************************************************/
+TYPE curtype
+IS
+  REF
+  CURSOR;
+    cur_c curtype;
+    createCurrSeatIndexSql  VARCHAR(10000);
+    fltSegClsTblNameSql     VARCHAR(1000);
+    fltLegCompTblNameSql    VARCHAR(1000);
+    bidPriceCurveTblNameSql VARCHAR(1000);
+    odiTable                VARCHAR(1000);
+    snapDate                VARCHAR(1000);
+    snapDateSeg             VARCHAR(1000);
+    snapDateBid             VARCHAR(1000);
+    selectAvailSeatSql      VARCHAR(6000);
+	insertSqlForTemp1       VARCHAR2(4000);
+    insertSqlForTemp2       VARCHAR2(4000);
+    -- For Exception handling.
+    l_sqlcode     VARCHAR2(20);
+    l_sqlerrm     VARCHAR2(100);
+--    g_sqlcode_snapdt varchar2(20);
+--   g_sqlerrm_snapdt varchar2(100);
+
+
+    l_line_number VARCHAR2(10);
+  TYPE c_record1
+IS
+  TABLE OF GTT_ODI_CURRENT_SEAT_INDEX.ID%TYPE INDEX BY pls_integer;
+  
+TYPE c_record2
+IS
+  TABLE OF GTT_ODI_CURRENT_SEAT_INDEX.COMP_CD%TYPE INDEX BY pls_integer;
+  
+TYPE c_record3
+IS
+  TABLE OF GTT_ODI_CURRENT_SEAT_INDEX.CURR_SEAT_INDEX%TYPE INDEX BY pls_integer;
+  
+TYPE c_record4
+IS
+  TABLE OF GTT_ODI_CURRENT_SEAT_INDEX.BID_PRICE_AMT%TYPE INDEX BY pls_integer;
+  
+TYPE g_availseat1
+IS
+  TABLE OF GTT_ODI_AVAIL_SEAT.ODI_ID%TYPE INDEX BY pls_integer;
+  
+TYPE g_availseat2
+IS
+  TABLE OF GTT_ODI_AVAIL_SEAT.COMP_CD%TYPE INDEX BY pls_integer;
+  
+TYPE g_availseat3
+IS
+  TABLE OF GTT_ODI_AVAIL_SEAT.CLS_CD%TYPE INDEX BY pls_integer;
+  
+TYPE g_availseat4
+IS
+  TABLE OF GTT_ODI_AVAIL_SEAT.BDAF_AMT%TYPE INDEX BY pls_integer;
+  
+TYPE g_availseat5
+IS
+  TABLE OF GTT_ODI_AVAIL_SEAT.BID_PRICE_AMT%TYPE INDEX BY pls_integer;
+  
+TYPE g_availseat6
+IS
+  TABLE OF GTT_ODI_AVAIL_SEAT.AVAIL_SEATS%TYPE INDEX BY pls_integer;
+  
+  TYPE g_availseat7
+IS
+  TABLE OF GTT_ODI_AVAIL_SEAT.SEG_LIMIT_AMT%TYPE INDEX BY pls_integer;
+  
+  c_rec1 c_record1;
+  c_rec2 c_record2;
+  c_rec3 c_record3;
+  c_rec4 c_record4;
+  g_rec1 g_availseat1;
+  g_rec2 g_availseat2;
+  g_rec3 g_availseat3;
+  g_rec4 g_availseat4;
+  g_rec5 g_availseat5;
+  g_rec6 g_availseat6;
+  g_rec7 g_availseat7;
+  /***************************************************************************************************
+  * Define Variables
+  ***************************************************************************************************/
+
+BEGIN
+
+  g_legComp_snapDt       := null;
+  g_legComp_isLive       := null;
+  g_segCls_snapDt        := null;
+  g_segCls_isLive        := null;
+  g_bidPrc_snapDt        := null;
+  g_bidPrc_isLive        := null;
+  jobIdCondition         := null;
+
+   jobIdCondition := CASE WHEN (JOB_ID > -2)
+      THEN ' AND JOB_ID = '|| JOB_ID ELSE '' END ;
+
+IF SNAP_DATE IS NOT NULL THEN
+BEGIN
+ SELECT
+  SNAP_DT ,
+  nvl(IS_LIVE,-1)
+  INTO g_legComp_snapDt,g_legComp_isLive
+FROM SNAP_DATE_LOG
+WHERE TABLE_NM   = 'RM_FLT_LEG_COMP' AND SNAP_DT =
+    (SELECT max(SNAP_DT)
+    FROM SNAP_DATE_LOG
+    WHERE SNAP_DT < TO_DATE(SNAP_DATE,'yyyy-MM-dd')
+    AND TABLE_NM   = 'RM_FLT_LEG_COMP'
+  ) ;
+  EXCEPTION
+  WHEN OTHERS THEN
+  g_legComp_isLive:= -1 ;
+  g_sqlcode_snapdt := SQLCODE;
+   g_sqlerrm_snapdt := SUBSTR(SQLERRM,1,100);
+   prc_RETURN_INFO := g_sqlcode_snapdt || ' ' || g_sqlerrm_snapdt;
+  l_line_number := substr(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE,
+                         instr(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE,' ',-1,1)+1,
+                         length(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE)
+                        );
+ pkg_error_log.sp_app_error_log('COMPUTE_AVAIL_SEAT_LEG_CNT_1',
+                                g_sqlcode_snapdt,
+                                g_sqlerrm_snapdt,
+                                'COMPUTE_AVAIL_SEAT_LEG_CNT_1 : Error getting snap_date and is_live parameter',
+                                SYS_CONTEXT('USERENV','OS_USER'),
+                                l_line_number);
+
+
+  END;
+  BEGIN
+  g_sqlcode_snapdt := null;
+  g_sqlerrm_snapdt := null;
+  l_line_number := null;
+ SELECT
+  SNAP_DT ,
+  nvl(IS_LIVE,-1)
+  INTO g_segCls_snapDt,g_segCls_isLive
+FROM SNAP_DATE_LOG
+WHERE TABLE_NM   = 'RM_FLT_SEG_CLS' AND SNAP_DT =
+    (SELECT max(SNAP_DT)
+    FROM SNAP_DATE_LOG
+     WHERE SNAP_DT < TO_DATE(SNAP_DATE,'yyyy-MM-dd')
+    AND TABLE_NM   = 'RM_FLT_SEG_CLS'
+  ) ;
+   EXCEPTION
+  WHEN OTHERS THEN
+  g_segCls_isLive:= -1;
+  g_sqlcode_snapdt := SQLCODE;
+   g_sqlerrm_snapdt := SUBSTR(SQLERRM,1,100);
+   prc_RETURN_INFO := g_sqlcode_snapdt || ' ' || g_sqlerrm_snapdt;
+  l_line_number := substr(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE,
+                         instr(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE,' ',-1,1)+1,
+                         length(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE)
+                        );
+ pkg_error_log.sp_app_error_log('COMPUTE_AVAIL_SEAT_LEG_CNT_1',
+                                g_sqlcode_snapdt,
+                                g_sqlerrm_snapdt,
+                                'COMPUTE_AVAIL_SEAT_LEG_CNT_1 : Error getting snap_date and is_live parameter',
+                                SYS_CONTEXT('USERENV','OS_USER'),
+                                l_line_number);
+
+
+  END;
+  BEGIN
+  g_sqlcode_snapdt := null;
+  g_sqlerrm_snapdt := null;
+  l_line_number := null;
+ SELECT
+  SNAP_DT ,
+  nvl(IS_LIVE,-1)
+  INTO g_bidPrc_snapDt,g_bidPrc_isLive
+FROM SNAP_DATE_LOG
+WHERE TABLE_NM   = 'RM_FLT_LEG_BIDPRICECURVE' AND SNAP_DT =
+    (SELECT max(SNAP_DT)
+    FROM SNAP_DATE_LOG
+     WHERE SNAP_DT < TO_DATE(SNAP_DATE,'yyyy-MM-dd')
+    AND TABLE_NM   = 'RM_FLT_LEG_BIDPRICECURVE'
+  ) ;
+   EXCEPTION
+  WHEN OTHERS THEN
+  g_bidPrc_isLive:= -1;
+  g_sqlcode_snapdt := SQLCODE;
+   g_sqlerrm_snapdt := SUBSTR(SQLERRM,1,100);
+   prc_RETURN_INFO := g_sqlcode_snapdt || ' ' || g_sqlerrm_snapdt;
+  l_line_number := substr(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE,
+                         instr(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE,' ',-1,1)+1,
+                         length(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE)
+                        );
+ pkg_error_log.sp_app_error_log('COMPUTE_AVAIL_SEAT_LEG_CNT_1',
+                                g_sqlcode_snapdt,
+                                g_sqlerrm_snapdt,
+                                'COMPUTE_AVAIL_SEAT_LEG_CNT_1 : Error getting snap_date and is_live parameter',
+                                SYS_CONTEXT('USERENV','OS_USER'),
+                                l_line_number);
+
+
+  END;
+END IF;
+
+IF (g_legComp_isLive != -1 OR g_segCls_isLive != -1 OR g_bidPrc_isLive != -1 OR SNAP_DATE IS NULL) THEN
+DBMS_OUTPUT.PUT_LINE('inside if');
+  fltSegClsTblNameSql :=
+  CASE
+  WHEN(SNAP_DATE IS NULL OR g_legComp_isLive = 1) THEN
+    'RM_FLT_SEG_CLS'
+  ELSE
+    'RM_FLT_SEG_CLS_HIST'
+  END;
+  fltLegCompTblNameSql :=
+  CASE
+  WHEN(SNAP_DATE IS NULL OR g_segCls_isLive = 1) THEN
+    'RM_FLT_LEG_COMP'
+  ELSE
+    'RM_FLT_LEG_COMP_HIST'
+  END;
+  bidPriceCurveTblNameSql :=
+  CASE
+  WHEN(SNAP_DATE IS NULL OR g_bidPrc_isLive = 1) THEN
+    'RM_FLT_LEG_BIDPRICECURVE'
+  ELSE
+    'RM_FLT_LEG_BIDPRICECURVE_HIST'
+  END;
+  snapDate :=
+  CASE
+  WHEN(g_legComp_isLive = 0) THEN
+    ' WHERE  FLC.SNAP_DT =  ''' || g_legComp_snapDt||''''
+  ELSE
+    ''
+  END;
+  snapDateSeg :=
+  CASE
+  WHEN(g_segCls_isLive = 0) THEN
+    ' AND SNAP_DT =  ''' || g_segCls_snapDt||''''
+  ELSE
+    ''
+  END;
+  snapDateBid :=
+  CASE
+  WHEN(g_bidPrc_isLive = 0) THEN
+    ' WHERE  BPC.SNAP_DT =  ''' || g_bidPrc_snapDt||''' AND '
+  ELSE
+    ' WHERE '
+  END;
+
+insertSqlForTemp1 := 'insert into GTT_ODI_AVAIL_SEAT_T1
+(ID, COMP_CD, CLS_CD, SEG_LIMIT_AMT,PAX_BKD_AMT,leg_count)  
+SELECT O.ID ID,
+      COMP_CD,
+      CLS_CD,
+      SL SEG_LIMIT_AMT,
+      PAX_BKD PAX_BKD_AMT,
+	  O.LEG_COUNT
+    FROM ' || TABLE_NAME || ' O
+    LEFT OUTER JOIN
+      (SELECT CO_SEG_ID,
+        COMP_CD,
+        CLS_CD,
+        NVL(SEG_LIMIT_AMT,999) SL,
+        PAX_BKD_AMT PAX_BKD
+      FROM '||fltSegClsTblNameSql||'
+      WHERE ( 
+       NVL(SEG_LIMIT_AMT,999) > PAX_BKD_AMT ) '||snapDateSeg||'
+      ) S
+    ON S.CO_SEG_ID  = O.CO_SEG_ID_1
+    AND O.LEG_COUNT = 1
+    ' || jobIdCondition || '
+    GROUP BY ID,
+	  LEG_COUNT,
+      COMP_CD,
+      CLS_CD,
+      SL,
+      PAX_BKD';
+	  
+	  EXECUTE IMMEDIATE insertSqlForTemp1;
+	  
+insertSqlForTemp2 :=   'insert into gtt_odi_avail_seat_t2
+                        (ID, COMP_CD, SEAT_INDEX, CURRENT_SEAT_INDEX, BID_PRICE_AMT)
+						SELECT P.ID ID,
+      P.COMP_CD COMP_CD,
+      SEAT_INDEX,
+      CURR_SEAT_INDEX,
+      P.BID_PRICE_AMT BID_PRICE_AMT
+    FROM
+      (SELECT ID,
+        COMP_CD,
+        SEAT_INDEX SEAT_INDEX,
+        CURR_SEAT_INDEX,
+        BID_PRICE_AMT BID_PRICE_AMT
+      FROM ' || TABLE_NAME || ' O
+      INNER JOIN
+        (SELECT CO_LEG_ID,
+         COMP_CD,
+         SEAT_INDEX,
+         BID_PRICE_SEAT_INDEX AS CURR_SEAT_INDEX,
+         BID_PRICE_AMT
+        FROM '||bidPriceCurveTblNameSql||' BPC '||snapDateBid||
+'     SEAT_INDEX <= BID_PRICE_SEAT_INDEX
+        ) S
+      ON S.CO_LEG_ID  = O.CO_LEG_ID_1
+      AND O.LEG_COUNT = 1
+      ' || jobIdCondition || '
+      ) P';
+    EXECUTE IMMEDIATE insertSqlForTemp2;
+	
+selectAvailSeatSql := 'SELECT odi_id,
+  comp_cd,
+  cls_cd,
+  bdaf_amt,
+  bid_price_amt,
+  avail_seats,
+  SEG_LIMIT_AMT
+FROM
+  (SELECT R.odi_id,
+    R.comp_cd,
+    R.cls_cd,
+    R.bdaf_amt,
+    R.bid_price_amt,
+    LEAST( curr_seat_index - seat_index , SL - PAX_BKD) + 1 AVAIL_SEATS,
+	SL AS SEG_LIMIT_AMT,
+    Row_number() over ( PARTITION BY R.odi_id, R.comp_cd, R.cls_cd ORDER BY R.seat_index ) AS RN
+  FROM
+    (SELECT P.id AS ODI_ID,
+      P.comp_cd  AS COMP_CD,
+      B.cls_cd   AS CLS_CD,
+      B.bdaf_amt,
+      P.bid_price_amt AS BID_PRICE_AMT,
+      curr_seat_index,
+      seat_index,
+      SEG_LIMIT_AMT SL,
+      PAX_BKD_AMT PAX_BKD
+    FROM gtt_odi_avail_seat_t1 SL
+    INNER JOIN gtt_odi_bdaf B
+    ON B.odi_id  = SL.id
+    AND B.cls_cd = SL.cls_cd
+    INNER JOIN
+      (SELECT id ID,
+        comp_cd COMP_CD,
+        seat_index,
+        CURRENT_SEAT_INDEX as CURR_SEAT_INDEX,
+        bid_price_amt,
+        MIN(P.bid_price_amt) over ( PARTITION BY P.id, P.comp_cd) AS CURR_BID_PRICE
+      FROM gtt_odi_avail_seat_t2 P
+      ) P ON B.odi_id     = P.id
+    AND B.comp_cd         = P.comp_cd
+    WHERE B.bdaf_amt      > P.curr_bid_price
+	AND SL.LEG_COUNT = 1
+    )R
+  WHERE R.bdaf_amt > R.bid_price_amt
+  )T
+WHERE rn = 1';
+
+DBMS_OUTPUT.put_line(selectAvailSeatSql);
+
+OPEN cur_c FOR selectAvailSeatSql;
+LOOP
+  FETCH cur_c bulk COLLECT
+  INTO g_rec1,
+    g_rec2,
+    g_rec3,
+    g_rec4,
+    g_rec5,
+    g_rec6,
+    g_rec7 LIMIT 200000;
+  forall i IN 1..g_rec1.count
+  INSERT
+  INTO GTT_ODI_AVAIL_SEAT 
+    (ODI_ID,COMP_CD,CLS_CD,BDAF_AMT,BID_PRICE_AMT,AVAIL_SEATS,SEG_LIMIT_AMT)VALUES
+    (
+      g_rec1(i),
+      g_rec2(i),
+      g_rec3(i),
+      g_rec4(i),
+      g_rec5(i),
+      g_rec6(i),
+      g_rec7(i)
+    );
+  EXIT
+WHEN g_rec1.count = 0;
+END LOOP;
+CLOSE cur_c;
+END IF;
+prc_RETURN_INFO := 'SUCCESS';
+
+EXCEPTION
+WHEN OTHERS THEN
+  l_sqlcode       := SQLCODE;
+  l_sqlerrm       := SUBSTR(SQLERRM,1,100);
+  prc_RETURN_INFO := l_sqlcode || ' ' || l_sqlerrm;
+  l_line_number := null;
+  l_line_number   := SUBSTR(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE, instr(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE,' ',-1,1)+1, LENGTH(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE) );
+  pkg_error_log.sp_app_error_log('COMPUTE_AVAIL_SEAT_LEG_CNT_1', l_sqlcode, l_sqlerrm, 'COMPUTE_AVAIL_SEAT_LEG_CNT_1 : Error during insert', SYS_CONTEXT('USERENV','OS_USER'), l_line_number);
+END COMPUTE_AVAIL_SEAT_LEG_CNT_1;
+PROCEDURE COMPUTE_AVAIL_SEAT_LEG_CNT_2
+  (
+    SNAP_DATE IN VARCHAR2,
+    TABLE_NAME IN VARCHAR2,
+    JOB_ID IN NUMBER,
+    prc_RETURN_INFO OUT VARCHAR2
+  )
+AS
+TYPE curtype
+IS
+  REF
+  CURSOR;
+    cur_c curtype;
+    currSeatIndexSql        VARCHAR2(4000);
+    fltSegClsTblNameSql     VARCHAR2(1000);
+    fltLegCompTblNameSql    VARCHAR2(1000);
+    bidPriceCurveTblNameSql VARCHAR2(1000);
+    snapDate                VARCHAR2(1000);
+    snapDateSeg             VARCHAR2(1000);
+    snapDateBid             VARCHAR2(1000);
+    selectAvailSeatSql      VARCHAR2(6000);
+    dropCurrSeatIndexSql    VARCHAR2(1000);
+    insertSqlForTemp1       VARCHAR2(4000);
+    insertSqlForTemp2       VARCHAR2(4000);
+    g_legComp_snapDt1        VARCHAR2(100);
+    g_segCls_snapDt1        VARCHAR2(100);
+    g_bidPrc_snapDt1        VARCHAR2(100);
+    -- For Exception handling.
+    l_sqlcode     VARCHAR2(20);
+    l_sqlerrm     VARCHAR2(100);
+    l_line_number VARCHAR2(10);
+  TYPE c_record1
+IS
+  TABLE OF GTT_ODI_CURRENT_SEAT_INDEX.ID%TYPE INDEX BY pls_integer;
+TYPE c_record2
+IS
+  TABLE OF GTT_ODI_CURRENT_SEAT_INDEX.COMP_CD%TYPE INDEX BY pls_integer;
+TYPE c_record3
+IS
+  TABLE OF GTT_ODI_CURRENT_SEAT_INDEX.CURR_SEAT_INDEX%TYPE INDEX BY pls_integer;
+TYPE c_record4
+IS
+  TABLE OF GTT_ODI_CURRENT_SEAT_INDEX.BID_PRICE_AMT%TYPE INDEX BY pls_integer;
+TYPE g_availseat1
+IS
+  TABLE OF GTT_ODI_AVAIL_SEAT.ODI_ID%TYPE INDEX BY pls_integer;
+TYPE g_availseat2
+IS
+  TABLE OF GTT_ODI_AVAIL_SEAT.COMP_CD%TYPE INDEX BY pls_integer;
+TYPE g_availseat3
+IS
+  TABLE OF GTT_ODI_AVAIL_SEAT.CLS_CD%TYPE INDEX BY pls_integer;
+TYPE g_availseat4
+IS
+  TABLE OF GTT_ODI_AVAIL_SEAT.BDAF_AMT%TYPE INDEX BY pls_integer;
+TYPE g_availseat5
+IS
+  TABLE OF GTT_ODI_AVAIL_SEAT.BID_PRICE_AMT%TYPE INDEX BY pls_integer;
+TYPE g_availseat6
+IS
+  TABLE OF GTT_ODI_AVAIL_SEAT.AVAIL_SEATS%TYPE INDEX BY pls_integer;  
+  
+TYPE g_availseat7
+IS
+  TABLE OF GTT_ODI_AVAIL_SEAT.SEG_LIMIT_AMT%TYPE INDEX BY pls_integer;
+  c_rec1 c_record1;
+  c_rec2 c_record2;
+  c_rec3 c_record3;
+  c_rec4 c_record4;
+  g_rec1 g_availseat1;
+  g_rec2 g_availseat2;
+  g_rec3 g_availseat3;
+  g_rec4 g_availseat4;
+  g_rec5 g_availseat5;
+  g_rec6 g_availseat6;
+  g_rec7 g_availseat7;
+  
+  
+BEGIN
+
+  g_legComp_snapDt       := null;
+  g_legComp_isLive       := null;
+  g_segCls_snapDt        := null;
+  g_segCls_isLive        := null;
+  g_bidPrc_snapDt        := null;
+  g_bidPrc_isLive        := null;
+    jobIdCondition         := null;
+
+   jobIdCondition := CASE WHEN (JOB_ID > -2)
+      THEN ' AND JOB_ID = '|| JOB_ID ELSE '' END ;
+
+IF SNAP_DATE IS NOT NULL THEN
+BEGIN
+   g_sqlcode_snapdt := null;
+   g_sqlerrm_snapdt := null;
+   l_line_number := null;
+ SELECT
+    to_char(SNAP_DT,'yyyy-MM-dd')  ,
+  nvl(IS_LIVE,-1)
+  INTO g_legComp_snapDt1,g_legComp_isLive
+FROM SNAP_DATE_LOG
+WHERE TABLE_NM   = 'RM_FLT_LEG_COMP' AND SNAP_DT =
+    (SELECT max(SNAP_DT)
+    FROM SNAP_DATE_LOG
+    WHERE SNAP_DT < TO_DATE(SNAP_DATE,'yyyy-MM-dd')
+    AND TABLE_NM   = 'RM_FLT_LEG_COMP'
+  ) ;
+  EXCEPTION
+  WHEN OTHERS THEN
+  g_legComp_isLive:= -1 ;
+  g_sqlcode_snapdt := SQLCODE;
+   g_sqlerrm_snapdt := SUBSTR(SQLERRM,1,100);
+   prc_RETURN_INFO := g_sqlcode_snapdt || ' ' || g_sqlerrm_snapdt;
+  l_line_number := substr(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE,
+                         instr(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE,' ',-1,1)+1,
+                         length(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE)
+                        );
+ pkg_error_log.sp_app_error_log('COMPUTE_AVAIL_SEAT_LEG_CNT_2',
+                                g_sqlcode_snapdt,
+                                g_sqlerrm_snapdt,
+                                'COMPUTE_AVAIL_SEAT_LEG_CNT_2 : Error getting snap_date and is_live parameter',
+                                SYS_CONTEXT('USERENV','OS_USER'),
+                                l_line_number);
+
+
+  END;
+  BEGIN
+  g_sqlcode_snapdt := null;
+  g_sqlerrm_snapdt := null;
+  l_line_number := null;
+ SELECT
+   to_char(SNAP_DT,'yyyy-MM-dd')  ,
+  nvl(IS_LIVE,-1)
+  INTO g_segCls_snapDt1,g_segCls_isLive
+FROM SNAP_DATE_LOG
+WHERE TABLE_NM   = 'RM_FLT_SEG_CLS' AND SNAP_DT =
+    (SELECT max(SNAP_DT)
+    FROM SNAP_DATE_LOG
+     WHERE SNAP_DT < TO_DATE(SNAP_DATE,'yyyy-MM-dd')
+    AND TABLE_NM   = 'RM_FLT_SEG_CLS'
+  ) ;
+   EXCEPTION
+  WHEN OTHERS THEN
+  g_segCls_isLive:= -1;
+  g_sqlcode_snapdt := SQLCODE;
+   g_sqlerrm_snapdt := SUBSTR(SQLERRM,1,100);
+   prc_RETURN_INFO := g_sqlcode_snapdt || ' ' || g_sqlerrm_snapdt;
+  l_line_number := substr(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE,
+                         instr(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE,' ',-1,1)+1,
+                         length(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE)
+                        );
+ pkg_error_log.sp_app_error_log('COMPUTE_AVAIL_SEAT_LEG_CNT_2',
+                                g_sqlcode_snapdt,
+                                g_sqlerrm_snapdt,
+                                'COMPUTE_AVAIL_SEAT_LEG_CNT_2 : Error getting snap_date and is_live parameter',
+                                SYS_CONTEXT('USERENV','OS_USER'),
+                                l_line_number);
+
+
+  END;
+  BEGIN
+  g_sqlcode_snapdt := null;
+  g_sqlerrm_snapdt := null;
+  l_line_number := null;
+ SELECT
+    to_char(SNAP_DT,'yyyy-MM-dd')  ,
+  nvl(IS_LIVE,-1)
+  INTO g_bidPrc_snapDt1,g_bidPrc_isLive
+FROM SNAP_DATE_LOG
+WHERE TABLE_NM   = 'RM_FLT_LEG_BIDPRICECURVE' AND SNAP_DT =
+    (SELECT max(SNAP_DT)
+    FROM SNAP_DATE_LOG
+     WHERE SNAP_DT < TO_DATE(SNAP_DATE,'yyyy-MM-dd')
+    AND TABLE_NM   = 'RM_FLT_LEG_BIDPRICECURVE'
+  ) ;
+   EXCEPTION
+  WHEN OTHERS THEN
+  g_bidPrc_isLive:= -1;
+  g_sqlcode_snapdt := SQLCODE;
+   g_sqlerrm_snapdt := SUBSTR(SQLERRM,1,100);
+   prc_RETURN_INFO := g_sqlcode_snapdt || ' ' || g_sqlerrm_snapdt;
+  l_line_number := substr(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE,
+                         instr(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE,' ',-1,1)+1,
+                         length(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE)
+                        );
+ pkg_error_log.sp_app_error_log('COMPUTE_AVAIL_SEAT_LEG_CNT_2',
+                                g_sqlcode_snapdt,
+                                g_sqlerrm_snapdt,
+                                'COMPUTE_AVAIL_SEAT_LEG_CNT_2 : Error getting snap_date and is_live parameter',
+                                SYS_CONTEXT('USERENV','OS_USER'),
+                                l_line_number);
+
+
+  END;
+END IF;
+
+IF (g_legComp_isLive != -1 OR g_segCls_isLive != -1 OR g_bidPrc_isLive != -1 OR SNAP_DATE IS NULL) THEN
+  fltSegClsTblNameSql :=
+
+  CASE
+  WHEN(SNAP_DATE IS NULL OR g_legComp_isLive = 1) THEN
+    'RM_FLT_SEG_CLS'
+  ELSE
+    'RM_FLT_SEG_CLS_HIST'
+  END;
+  fltLegCompTblNameSql :=
+  CASE
+  WHEN(SNAP_DATE IS NULL OR g_segCls_isLive = 1) THEN
+    'RM_FLT_LEG_COMP'
+  ELSE
+    'RM_FLT_LEG_COMP_HIST'
+  END;
+  bidPriceCurveTblNameSql :=
+  CASE
+  WHEN(SNAP_DATE IS NULL OR g_bidPrc_isLive = 1) THEN
+    'RM_FLT_LEG_BIDPRICECURVE'
+  ELSE
+    'RM_FLT_LEG_BIDPRICECURVE_HIST'
+  END;
+
+   snapDate :=
+  CASE
+  WHEN(g_legComp_isLive = 0) THEN
+    ' WHERE  FLC.SNAP_DT =  date''' || g_legComp_snapDt1||''''
+  ELSE
+    ''
+  END;
+  snapDateSeg :=
+  CASE
+  WHEN(g_segCls_isLive = 0) THEN
+    ' AND S.SNAP_DT = date''' || g_segCls_snapDt1||''''
+  ELSE
+    ''
+  END;
+  snapDateBid :=
+  CASE
+  WHEN(g_bidPrc_isLive = 0) THEN
+    ' WHERE  BPC.SNAP_DT =  date''' || g_bidPrc_snapDt1||''''
+  ELSE
+    ''
+  END;
+
+insertSqlForTemp1 := 'insert into GTT_ODI_AVAIL_SEAT_T1
+(ID, COMP_CD, CLS_CD, SEG_LIMIT_AMT,PAX_BKD_AMT,LEG_COUNT)  
+                        SELECT coalesce(O1.id,O2.ID) ID, 
+                               coalesce(O1.comp_cd,O2.COMP_CD) COMP_CD ,
+                               coalesce(O1.cls_cd,O2.CLS_CD) CLS_CD,
+                               coalesce(O1.SL,O2.SL) SEG_LIMIT_AMT,
+                               coalesce(O1.PAX_BKD,O2.PAX_BKD) PAX_BKD_AMT,
+							   coalesce(O1.LEG_COUNT,O2.LEG_COUNT) LEG_COUNT
+                        FROM   (SELECT co_seg_id, 
+                                       comp_cd, 
+                                       cls_cd, 
+                                       O.id ,
+                                        NVL(SEG_LIMIT_AMT,999) SL,
+                                        PAX_BKD_AMT PAX_BKD,
+										O.LEG_COUNT
+                                FROM   '||fltSegClsTblNameSql||' S 
+                                       INNER JOIN ' || TABLE_NAME || ' O
+                                               ON S.co_seg_id = O.co_seg_id_1
+                                                  AND O.leg_count = 2
+                                WHERE   NVL(seg_limit_amt,999) > pax_bkd_amt
+                                          '||snapDateSeg||' ' || jobIdCondition || ') O1
+                               FULL OUTER JOIN (SELECT co_seg_id,
+                                                  comp_cd,
+                                                  cls_cd,
+                                                  O.id ,
+                                                  NVL(SEG_LIMIT_AMT,999) SL,
+                                                  PAX_BKD_AMT PAX_BKD,
+												  O.LEG_COUNT
+                                           FROM   '||fltSegClsTblNameSql||' S
+                                                  INNER JOIN ' || TABLE_NAME || ' O
+                                                          ON S.co_seg_id =
+                                                             O.co_seg_id_2
+                                                             AND O.leg_count = 2
+                                           WHERE   NVL(seg_limit_amt,999) > pax_bkd_amt
+                                                        '||snapDateSeg||' ' || jobIdCondition || ') O2
+                                       ON O1.id = O2.id
+                                          AND O1.comp_cd = O2.comp_cd
+                                          AND O1.cls_cd = O2.cls_cd';
+EXECUTE IMMEDIATE insertSqlForTemp1;
+
+
+insertSqlForTemp2 := 'insert into gtt_odi_avail_seat_t2
+                        (ID, COMP_CD, SEAT_INDEX, CURRENT_SEAT_INDEX, BID_PRICE_AMT)
+                        SELECT ID,COMP_CD,SEAT_INDEX,CURRENT_SEAT_INDEX,BID_PRICE_AMT  FROM (
+                        SELECT O1.id,
+                               O1.comp_cd,
+                               LEAST (O1.seat_index,S.seat_index) SEAT_INDEX,
+                               LEAST( O1.BID_PRICE_SEAT_INDEX, S.BID_PRICE_SEAT_INDEX )         AS CURRENT_SEAT_INDEX,
+                               (O1.bid_price_amt1 + S.bid_price_amt1) AS BID_PRICE_AMT
+                        FROM   (SELECT co_leg_id,
+                                       comp_cd,
+                                       seat_index,
+                                       BID_PRICE_SEAT_INDEX,
+                                       bid_price_amt BID_PRICE_AMT1,
+                                       id,
+                                       ROW_NUMBER() over (partition by id,comp_cd order by seat_index DESC) seat_index_rank
+                                FROM   '||bidPriceCurveTblNameSql||' BPC
+                                       INNER JOIN ' || TABLE_NAME || ' O
+                                               ON BPC.co_leg_id =
+                                                  O.co_leg_id_1
+                                                  AND
+                                       O.leg_count = 2
+									   AND SEAT_INDEX <= BID_PRICE_SEAT_INDEX
+                                       '||snapDateBid||' ' || jobIdCondition || ') O1
+                               INNER JOIN (SELECT
+                                       co_leg_id,
+                                       comp_cd,
+                                       seat_index,
+                                       BID_PRICE_SEAT_INDEX,
+                                       bid_price_amt BID_PRICE_AMT1,
+                                       id,
+										ROW_NUMBER() over (partition by id,comp_cd order by seat_index DESC) seat_index_rank
+                                FROM  '||bidPriceCurveTblNameSql||' BPC
+                               INNER JOIN ' || TABLE_NAME || ' O
+                                       ON BPC.co_leg_id =
+                                          O.co_leg_id_2
+                                          AND
+                               O.leg_count = 2
+							   AND SEAT_INDEX <= BID_PRICE_SEAT_INDEX
+                               '||snapDateBid||' ' || jobIdCondition || ') S
+                                       ON S.id = O1.id
+                                          AND O1.comp_cd = S.comp_cd
+                                          AND O1.seat_index_rank = S.seat_index_rank) WHERE SEAT_INDEX <= CURRENT_SEAT_INDEX';
+EXECUTE IMMEDIATE insertSqlForTemp2;
+-- calculate available seat according to bid price fall back logic. 
+g_remainingodicount:= 0;
+  -- GETTING REMAINING ODI COUNT 
+  g_countOdiSql := 'SELECT CNT.ODI_CNT 
+    FROM   (SELECT Count(*) AS ODI_CNT 
+          FROM '||TABLE_NAME||' 
+          WHERE  cls_cd_f1 != cls_cd_f2
+		  And Leg_Count = 2)Cnt'; 
+      
+      dbms_output.put_line(g_countOdiSql);
+      
+  EXECUTE IMMEDIATE (g_countOdiSql) INTO g_remainingODICount; 
+		 Dbms_Output.Put_Line('g_remainingodicount:::' ||G_Remainingodicount); 
+ 
+  IF g_remainingodicount > 0 THEN 
+insertSqlForTemp2 := null;
+insertSqlForTemp2 := 'insert into gtt_odi_avail_seat_t2
+                        (ID, COMP_CD, SEAT_INDEX, CURRENT_SEAT_INDEX, BID_PRICE_AMT)
+                        SELECT ID,COMP_CD,SEAT_INDEX,CURRENT_SEAT_INDEX,BID_PRICE_AMT  FROM (
+                        SELECT O1.id,
+                               O1.comp_cd,
+                               LEAST (O1.seat_index,S.seat_index) SEAT_INDEX,
+                               LEAST( O1.BID_PRICE_SEAT_INDEX, S.BID_PRICE_SEAT_INDEX )         AS CURRENT_SEAT_INDEX,
+                               (O1.bid_price_amt1 + S.bid_price_amt1) AS BID_PRICE_AMT
+                        FROM   (SELECT co_leg_id,
+                                       comp_cd,
+                                       seat_index,
+                                       BID_PRICE_SEAT_INDEX,
+                                       bid_price_amt BID_PRICE_AMT1,
+                                       id,
+                                       ROW_NUMBER() over (partition by id,comp_cd order by seat_index DESC) seat_index_rank
+                                FROM   '||bidPriceCurveTblNameSql||' BPC
+                                       INNER JOIN ' || TABLE_NAME || ' O
+                                               ON BPC.co_leg_id =
+                                                  O.co_leg_id_1
+                                                  AND
+                                       O.leg_count = 2
+									   AND  SEAT_INDEX <= BID_PRICE_SEAT_INDEX
+                                       '||snapDateBid||' ' || jobIdCondition || ') O1
+                               INNER JOIN (SELECT
+                                       co_leg_id,
+                                       Decode(BPC.comp_cd, ''C'', ''F'', 
+                                                      ''M'', ''E'') comp_cd,
+                                       seat_index,
+                                       BID_PRICE_SEAT_INDEX,
+                                       bid_price_amt BID_PRICE_AMT1,
+                                       id,
+									  ROW_NUMBER() over (partition by id,comp_cd order by seat_index DESC) seat_index_rank
+                                FROM  '||bidPriceCurveTblNameSql||' BPC
+                               INNER JOIN ' || TABLE_NAME || ' O
+                                       ON BPC.co_leg_id =
+                                          O.co_leg_id_2
+                                          AND
+                               O.leg_count = 2
+							   AND SEAT_INDEX <= BID_PRICE_SEAT_INDEX
+                               '||snapDateBid||' ' || jobIdCondition || ') S
+                                       ON S.id = O1.id
+                                          AND O1.comp_cd = S.comp_cd
+                                          AND O1.seat_index_rank = S.seat_index_rank) WHERE SEAT_INDEX <= CURRENT_SEAT_INDEX';
+EXECUTE IMMEDIATE insertSqlForTemp2;
+-- BID Price fall back logic in case F and E comp_cd is not available in first leg of odi.
+insertSqlForTemp2 := null;
+insertSqlForTemp2 := 'insert into gtt_odi_avail_seat_t2
+                        (ID, COMP_CD, SEAT_INDEX, CURRENT_SEAT_INDEX, BID_PRICE_AMT)
+                        SELECT ID,COMP_CD,SEAT_INDEX,CURRENT_SEAT_INDEX,BID_PRICE_AMT  FROM (
+                        SELECT O1.id,
+                               O1.comp_cd,
+                               LEAST (O1.seat_index,S.seat_index) SEAT_INDEX,
+                               LEAST( O1.BID_PRICE_SEAT_INDEX, S.BID_PRICE_SEAT_INDEX )         AS CURRENT_SEAT_INDEX,
+                               (O1.bid_price_amt1 + S.bid_price_amt1) AS BID_PRICE_AMT
+                        FROM   (SELECT co_leg_id,
+                                         Decode(BPC.comp_cd, ''C'', ''F'', 
+                                                      ''M'', ''E'') comp_cd,
+                                       seat_index,
+                                       BID_PRICE_SEAT_INDEX,
+                                       bid_price_amt BID_PRICE_AMT1,
+                                       id,
+                                       ROW_NUMBER() over (partition by id,comp_cd order by seat_index DESC) seat_index_rank
+                                FROM   '||bidPriceCurveTblNameSql||' BPC
+                                       INNER JOIN ' || TABLE_NAME || ' O
+                                               ON BPC.co_leg_id =
+                                                  O.co_leg_id_1
+                                                  AND
+                                       O.leg_count = 2
+									   AND SEAT_INDEX <= BID_PRICE_SEAT_INDEX
+                                       '||snapDateBid||' ' || jobIdCondition || ') O1
+                               INNER JOIN (SELECT
+                                       co_leg_id,
+                                       comp_cd,
+                                       seat_index,
+                                       BID_PRICE_SEAT_INDEX,
+                                       bid_price_amt BID_PRICE_AMT1,
+                                       id,
+									   ROW_NUMBER() over (partition by id,comp_cd order by seat_index DESC) seat_index_rank
+                                FROM  '||bidPriceCurveTblNameSql||' BPC
+                               INNER JOIN ' || TABLE_NAME || ' O
+                                       ON BPC.co_leg_id =
+                                          O.co_leg_id_2
+                                          AND
+                               O.leg_count = 2
+							   AND SEAT_INDEX <= BID_PRICE_SEAT_INDEX
+                               '||snapDateBid||' ' || jobIdCondition || ') S
+                                       ON S.id = O1.id
+                                          AND O1.comp_cd = S.comp_cd
+                                          AND O1.seat_index_rank = S.seat_index_rank) WHERE SEAT_INDEX <= CURRENT_SEAT_INDEX';
+EXECUTE IMMEDIATE insertSqlForTemp2;
+
+end if;
+
+selectAvailSeatSql := 'SELECT odi_id,
+  comp_cd,
+  cls_cd,
+  bdaf_amt,
+  bid_price_amt,
+  avail_seats,
+  SEG_LIMIT_AMT
+FROM
+  (SELECT R.odi_id,
+    R.comp_cd,
+    R.cls_cd,
+    R.bdaf_amt,
+    R.bid_price_amt,
+    LEAST( curr_seat_index - seat_index , SL - PAX_BKD) + 1 AVAIL_SEATS,
+	SL SEG_LIMIT_AMT,
+    Row_number() over ( PARTITION BY R.odi_id, R.comp_cd, R.cls_cd ORDER BY R.seat_index ) AS RN
+  FROM
+    (SELECT P.id AS ODI_ID,
+      P.comp_cd  AS COMP_CD,
+      B.cls_cd   AS CLS_CD,
+      B.bdaf_amt,
+      P.bid_price_amt AS BID_PRICE_AMT,
+      curr_seat_index,
+      seat_index,
+      SEG_LIMIT_AMT SL,
+      PAX_BKD_AMT PAX_BKD
+    FROM gtt_odi_avail_seat_t1 SL
+    INNER JOIN gtt_odi_bdaf B
+    ON B.odi_id  = SL.id
+    AND B.cls_cd = SL.cls_cd
+    INNER JOIN
+      (SELECT id ID,
+        comp_cd COMP_CD,
+        seat_index,
+        CURRENT_SEAT_INDEX as CURR_SEAT_INDEX,
+        bid_price_amt,
+        MIN(P.bid_price_amt) over ( PARTITION BY P.id, P.comp_cd) AS CURR_BID_PRICE
+      FROM gtt_odi_avail_seat_t2 P
+      ) P ON B.odi_id     = P.id
+    AND B.comp_cd         = P.comp_cd
+    WHERE B.bdaf_amt      > P.curr_bid_price
+	AND SL.LEG_COUNT = 2
+    )R
+  WHERE R.bdaf_amt > R.bid_price_amt 
+  )T
+WHERE rn = 1';
+
+OPEN cur_c FOR selectAvailSeatSql;
+LOOP
+  FETCH cur_c bulk COLLECT
+  INTO g_rec1,
+    g_rec2,
+    g_rec3,
+    g_rec4,
+    g_rec5,
+    g_rec6,
+	g_rec7 LIMIT 200000;
+  forall i IN 1..g_rec1.count
+  INSERT
+  INTO GTT_ODI_AVAIL_SEAT 
+  (ODI_ID,COMP_CD,CLS_CD,BDAF_AMT,BID_PRICE_AMT,AVAIL_SEATS,SEG_LIMIT_AMT)
+  VALUES
+    (
+      g_rec1(i),
+      g_rec2(i),
+      g_rec3(i),
+      g_rec4(i),
+      g_rec5(i),
+      g_rec6(i),
+	  g_rec7(i)
+    );
+  EXIT
+WHEN g_rec1.count = 0;
+END LOOP;
+CLOSE cur_c;
+
+END IF;
+prc_RETURN_INFO := 'SUCCESS';
+DBMS_OUTPUT.PUT_LINE(prc_RETURN_INFO);
+EXCEPTION
+WHEN OTHERS THEN
+  l_sqlcode       := SQLCODE;
+  l_sqlerrm       := SUBSTR(SQLERRM,1,100);
+  l_line_number := null;
+  prc_RETURN_INFO := l_sqlcode || ' ' || l_sqlerrm;
+  l_line_number   := SUBSTR(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE, instr(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE,' ',-1,1)+1, LENGTH(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE) );
+  pkg_error_log.sp_app_error_log('COMPUTE_AVAIL_SEAT_LEG_CNT_2', l_sqlcode, l_sqlerrm, 'COMPUTE_AVAIL_SEAT_LEG_CNT_2 : Error during insert', SYS_CONTEXT('USERENV','OS_USER'), l_line_number);
+END COMPUTE_AVAIL_SEAT_LEG_CNT_2;
+PROCEDURE COMPUTE_AVAIL_SEAT_LEG_CNT_3
+  (
+    SNAP_DATE IN VARCHAR2,
+    TABLE_NAME IN VARCHAR2,
+    JOB_ID IN NUMBER,
+    prc_RETURN_INFO OUT VARCHAR2
+  )
+AS
+TYPE curtype
+IS
+  REF
+  CURSOR;
+    cur_c curtype;
+    currSeatIndexSql        VARCHAR2(10000);
+    fltSegClsTblNameSql     VARCHAR2(1000);
+    fltLegCompTblNameSql    VARCHAR2(4000);
+    bidPriceCurveTblNameSql VARCHAR2(1000);
+    snapDate                VARCHAR2(4000);
+    snapDateSeg             VARCHAR2(1000);
+    snapDateBid             VARCHAR2(1000);
+    selectAvailSeatSql      VARCHAR2(10000);
+    insertSqlForTemp1       VARCHAR2(4000);
+    insertSqlForTemp2       VARCHAR2(4000);
+    dropCurrSeatIndexSql    VARCHAR2(1000);
+    g_legComp_snapDt1        VARCHAR2(100);
+    g_segCls_snapDt1        VARCHAR2(100);
+    g_bidPrc_snapDt1        VARCHAR2(100);
+    -- For Exception handling.
+    l_sqlcode     VARCHAR2(20);
+    l_sqlerrm     VARCHAR2(100);
+    l_line_number VARCHAR2(10);
+  TYPE c_record1
+IS
+  TABLE OF GTT_ODI_CURRENT_SEAT_INDEX.ID%TYPE INDEX BY pls_integer;
+TYPE c_record2
+IS
+  TABLE OF GTT_ODI_CURRENT_SEAT_INDEX.COMP_CD%TYPE INDEX BY pls_integer;
+TYPE c_record3
+IS
+  TABLE OF GTT_ODI_CURRENT_SEAT_INDEX.CURR_SEAT_INDEX%TYPE INDEX BY pls_integer;
+TYPE c_record4
+IS
+  TABLE OF GTT_ODI_CURRENT_SEAT_INDEX.BID_PRICE_AMT%TYPE INDEX BY pls_integer;
+TYPE g_availseat1
+IS
+  TABLE OF GTT_ODI_AVAIL_SEAT.ODI_ID%TYPE INDEX BY pls_integer;
+TYPE g_availseat2
+IS
+  TABLE OF GTT_ODI_AVAIL_SEAT.COMP_CD%TYPE INDEX BY pls_integer;
+TYPE g_availseat3
+IS
+  TABLE OF GTT_ODI_AVAIL_SEAT.CLS_CD%TYPE INDEX BY pls_integer;
+TYPE g_availseat4
+IS
+  TABLE OF GTT_ODI_AVAIL_SEAT.BDAF_AMT%TYPE INDEX BY pls_integer;
+TYPE g_availseat5
+IS
+  TABLE OF GTT_ODI_AVAIL_SEAT.BID_PRICE_AMT%TYPE INDEX BY pls_integer;
+TYPE g_availseat6
+IS
+  TABLE OF GTT_ODI_AVAIL_SEAT.AVAIL_SEATS%TYPE INDEX BY pls_integer;
+  TYPE g_availseat7
+IS
+  TABLE OF GTT_ODI_AVAIL_SEAT.SEG_LIMIT_AMT%TYPE INDEX BY pls_integer;
+  
+  c_rec1 c_record1;
+  c_rec2 c_record2;
+  c_rec3 c_record3;
+  c_rec4 c_record4;
+  g_rec1 g_availseat1;
+  g_rec2 g_availseat2;
+  g_rec3 g_availseat3;
+  g_rec4 g_availseat4;
+  g_rec5 g_availseat5;
+  g_rec6 g_availseat6;
+  g_rec7 g_availseat7;
+  
+BEGIN
+
+  g_legComp_snapDt       := null;
+  g_legComp_isLive       := null;
+  g_segCls_snapDt        := null;
+  g_segCls_isLive        := null;
+  g_bidPrc_snapDt        := null;
+  g_bidPrc_isLive        := null;
+  jobIdCondition         := null;
+
+   jobIdCondition := CASE WHEN (JOB_ID > -2)
+      THEN ' AND JOB_ID = '|| JOB_ID ELSE '' END ;
+
+IF SNAP_DATE IS NOT NULL THEN
+BEGIN
+   g_sqlcode_snapdt := null;
+   g_sqlerrm_snapdt := null;
+   l_line_number := null;
+ SELECT
+  to_char(SNAP_DT,'yyyy-MM-dd')  ,
+  nvl(IS_LIVE,-1)
+  INTO g_legComp_snapDt1,g_legComp_isLive
+FROM SNAP_DATE_LOG
+WHERE TABLE_NM   = 'RM_FLT_LEG_COMP' AND SNAP_DT =
+    (SELECT max(SNAP_DT)
+    FROM SNAP_DATE_LOG
+    WHERE SNAP_DT < TO_DATE(SNAP_DATE,'yyyy-MM-dd')
+    AND TABLE_NM   = 'RM_FLT_LEG_COMP'
+  ) ;
+  EXCEPTION
+  WHEN OTHERS THEN
+  g_legComp_isLive:= -1 ;
+  g_sqlcode_snapdt := SQLCODE;
+   g_sqlerrm_snapdt := SUBSTR(SQLERRM,1,100);
+   prc_RETURN_INFO := g_sqlcode_snapdt || ' ' || g_sqlerrm_snapdt;
+  l_line_number := substr(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE,
+                         instr(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE,' ',-1,1)+1,
+                         length(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE)
+                        );
+ pkg_error_log.sp_app_error_log('COMPUTE_AVAIL_SEAT_LEG_CNT_3',
+                                g_sqlcode_snapdt,
+                                g_sqlerrm_snapdt,
+                                'COMPUTE_AVAIL_SEAT_LEG_CNT_3 : Error getting snap_date and is_live parameter',
+                                SYS_CONTEXT('USERENV','OS_USER'),
+                                l_line_number);
+
+
+  END;
+  BEGIN
+  g_sqlcode_snapdt := null;
+  g_sqlerrm_snapdt := null;
+  l_line_number := null;
+ SELECT
+  to_char(SNAP_DT,'yyyy-MM-dd'),
+  nvl(IS_LIVE,-1)
+  INTO g_segCls_snapDt1,g_segCls_isLive
+FROM SNAP_DATE_LOG
+WHERE TABLE_NM   = 'RM_FLT_SEG_CLS' AND SNAP_DT =
+    (SELECT max(SNAP_DT)
+    FROM SNAP_DATE_LOG
+     WHERE SNAP_DT < TO_DATE(SNAP_DATE,'yyyy-MM-dd')
+    AND TABLE_NM   = 'RM_FLT_SEG_CLS'
+  ) ;
+   EXCEPTION
+  WHEN OTHERS THEN
+  g_segCls_isLive:= -1;
+  g_sqlcode_snapdt := SQLCODE;
+   g_sqlerrm_snapdt := SUBSTR(SQLERRM,1,100);
+   prc_RETURN_INFO := g_sqlcode_snapdt || ' ' || g_sqlerrm_snapdt;
+  l_line_number := substr(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE,
+                         instr(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE,' ',-1,1)+1,
+                         length(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE)
+                        );
+ pkg_error_log.sp_app_error_log('COMPUTE_AVAIL_SEAT_LEG_CNT_3',
+                                g_sqlcode_snapdt,
+                                g_sqlerrm_snapdt,
+                                'COMPUTE_AVAIL_SEAT_LEG_CNT_3 : Error getting snap_date and is_live parameter',
+                                SYS_CONTEXT('USERENV','OS_USER'),
+                                l_line_number);
+
+
+  END;
+  BEGIN
+  g_sqlcode_snapdt := null;
+  g_sqlerrm_snapdt := null;
+  l_line_number := null;
+ SELECT
+  to_char(SNAP_DT,'yyyy-MM-dd')  ,
+  nvl(IS_LIVE,-1)
+  INTO g_bidPrc_snapDt1,g_bidPrc_isLive
+FROM SNAP_DATE_LOG
+WHERE TABLE_NM   = 'RM_FLT_LEG_BIDPRICECURVE' AND SNAP_DT =
+    (SELECT max(SNAP_DT)
+    FROM SNAP_DATE_LOG
+     WHERE SNAP_DT < TO_DATE(SNAP_DATE,'yyyy-MM-dd')
+    AND TABLE_NM   = 'RM_FLT_LEG_BIDPRICECURVE'
+  ) ;
+   EXCEPTION
+  WHEN OTHERS THEN
+  g_bidPrc_isLive:= -1;
+  g_sqlcode_snapdt := SQLCODE;
+   g_sqlerrm_snapdt := SUBSTR(SQLERRM,1,100);
+   prc_RETURN_INFO := g_sqlcode_snapdt || ' ' || g_sqlerrm_snapdt;
+  l_line_number := substr(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE,
+                         instr(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE,' ',-1,1)+1,
+                         length(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE)
+                        );
+ pkg_error_log.sp_app_error_log('COMPUTE_AVAIL_SEAT_LEG_CNT_3',
+                                g_sqlcode_snapdt,
+                                g_sqlerrm_snapdt,
+                                'COMPUTE_AVAIL_SEAT_LEG_CNT_3 : Error getting snap_date and is_live parameter',
+                                SYS_CONTEXT('USERENV','OS_USER'),
+                                l_line_number);
+
+
+  END;
+END IF;
+IF (g_legComp_isLive != -1 OR g_segCls_isLive != -1 OR g_bidPrc_isLive != -1 OR SNAP_DATE IS NULL) THEN
+  fltSegClsTblNameSql :=
+  CASE
+  WHEN(SNAP_DATE IS NULL OR g_legComp_isLive = 1) THEN
+    'RM_FLT_SEG_CLS'
+  ELSE
+    'RM_FLT_SEG_CLS_HIST'
+  END;
+  fltLegCompTblNameSql :=
+  CASE
+  WHEN(SNAP_DATE IS NULL OR g_segCls_isLive = 1) THEN
+    'RM_FLT_LEG_COMP'
+  ELSE
+    'RM_FLT_LEG_COMP_HIST'
+  END;
+  bidPriceCurveTblNameSql :=
+  CASE
+  WHEN(SNAP_DATE IS NULL OR g_bidPrc_isLive = 1) THEN
+    'RM_FLT_LEG_BIDPRICECURVE'
+  ELSE
+    'RM_FLT_LEG_BIDPRICECURVE_HIST'
+  END;
+  snapDate :=
+  CASE
+  WHEN(g_legComp_isLive = 0) THEN
+    ' WHERE  FLC.SNAP_DT =  date''' || g_legComp_snapDt1||''''
+  ELSE
+    ''
+  END;
+  snapDateSeg :=
+  CASE
+  WHEN(g_segCls_isLive = 0) THEN
+    ' AND S.SNAP_DT = date''' || g_segCls_snapDt1||''''
+  ELSE
+    ''
+  END;
+  snapDateBid :=
+  CASE
+  WHEN(g_bidPrc_isLive = 0) THEN
+    ' WHERE  BPC.SNAP_DT =  date''' || g_bidPrc_snapDt1||''''
+  ELSE
+    ''
+  END;
+  
+insertSqlForTemp1 := 'insert into GTT_ODI_AVAIL_SEAT_T1
+                      (ID, COMP_CD, CLS_CD, SEG_LIMIT_AMT,PAX_BKD_AMT,LEG_COUNT)
+                       SELECT
+                                coalesce(O1.id,O2.ID,O3.ID) ID, 
+                               coalesce(O1.comp_cd,O2.COMP_CD,O3.COMP_CD) COMP_CD ,
+                               coalesce(O1.cls_cd,O2.CLS_CD,O3.CLS_CD) CLS_CD,
+  								coalesce(O1.SL,O2.SL,O3.SL) SEG_LIMIT_AMT,
+								coalesce(O1.PAX_BKD_AMT,O2.PAX_BKD_AMT,O3.PAX_BKD_AMT) PAX_BKD_AMT,
+								coalesce(O1.LEG_COUNT,O2.LEG_COUNT,O3.LEG_COUNT) LEG_COUNT
+                        FROM (SELECT co_seg_id,
+                                       comp_cd,
+                                       cls_cd,
+                                       O.id,
+                                        NVL(SEG_LIMIT_AMT,999) SL,
+                                        PAX_BKD_AMT PAX_BKD_AMT,
+										O.LEG_COUNT LEG_COUNT
+                                FROM   '||fltSegClsTblNameSql||' S
+                                       INNER JOIN ' || TABLE_NAME || ' O
+
+                                               ON S.co_seg_id = O.co_seg_id_1
+                                                  AND O.leg_count = 3
+
+                                WHERE   NVL(seg_limit_amt,999) > pax_bkd_amt
+                                          '||snapDateSeg||' ' || jobIdCondition || ') O1
+
+                                FULL OUTER JOIN (SELECT co_seg_id,
+                                                  comp_cd,
+                                                  cls_cd,
+                                                  O.id,
+												 NVL(SEG_LIMIT_AMT,999) SL,
+                                                 PAX_BKD_AMT PAX_BKD_AMT,
+												O.LEG_COUNT LEG_COUNT
+                                           FROM   '||fltSegClsTblNameSql||' S
+                                                  INNER JOIN ' || TABLE_NAME || ' O
+                                                          ON S.co_seg_id =
+                                                             O.co_seg_id_2
+                                                             AND O.leg_count = 3
+                                           WHERE  ( seg_limit_amt IS NULL
+                                                     OR seg_limit_amt >
+
+                                                        pax_bkd_amt )
+                                                        '||snapDateSeg||' ' || jobIdCondition || ') O2														
+													ON O1.id = O2.id
+														AND O1.comp_cd = O2.comp_cd
+														AND O1.cls_cd = O2.cls_cd
+                                FULL OUTER JOIN (SELECT co_seg_id,
+                                                  comp_cd,
+                                                  cls_cd,
+                                                  O.id,
+												  NVL(SEG_LIMIT_AMT,999) SL,
+                                                  PAX_BKD_AMT PAX_BKD_AMT,
+												  O.LEG_COUNT LEG_COUNT
+                                           FROM   '||fltSegClsTblNameSql||' S
+                                                  INNER JOIN ' || TABLE_NAME || ' O
+                                                          ON S.co_seg_id =
+                                                             O.co_seg_id_3
+                                                             AND O.leg_count = 3
+                                           WHERE   NVL(seg_limit_amt,999) > pax_bkd_amt
+                                                        '||snapDateSeg||' ' || jobIdCondition || ') O3
+                                                         ON O1.id = O3.id
+														AND O1.comp_cd = O3.comp_cd
+														AND O1.cls_cd = O3.cls_cd';
+														
+														DBMS_OUTPUT.put_line(insertSqlForTemp1);
+
+
+EXECUTE IMMEDIATE insertSqlForTemp1;
+
+
+insertSqlForTemp2 := 'insert into gtt_odi_avail_seat_t2
+                        (ID, COMP_CD, SEAT_INDEX, CURRENT_SEAT_INDEX, BID_PRICE_AMT)
+                        SELECT ID,COMP_CD,SEAT_INDEX,CURRENT_SEAT_INDEX,BID_PRICE_AMT  FROM (
+                        SELECT O1.id,
+                               O1.comp_cd,
+                               LEAST (O1.seat_index, O2.seat_index, O3.seat_index) SEAT_INDEX,
+                               LEAST( O1.BID_PRICE_SEAT_INDEX, O2.BID_PRICE_SEAT_INDEX, O3.BID_PRICE_SEAT_INDEX ) AS CURRENT_SEAT_INDEX,
+                               (O1.bid_price_amt1 + O2.bid_price_amt1 + O3.bid_price_amt1) AS BID_PRICE_AMT
+                        FROM   (SELECT co_leg_id,
+                                       comp_cd,
+                                       seat_index,
+                                       BID_PRICE_SEAT_INDEX,
+                                       bid_price_amt BID_PRICE_AMT1,
+                                       id,
+                                       ROW_NUMBER() over (partition by id,comp_cd order by seat_index DESC) seat_index_rank
+                                FROM   '||bidPriceCurveTblNameSql||' BPC
+                                       INNER JOIN ' || TABLE_NAME || ' O
+                                               ON BPC.co_leg_id =
+                                                  O.co_leg_id_1
+                                                  AND
+                                       O.leg_count = 3
+									   AND SEAT_INDEX <= BID_PRICE_SEAT_INDEX
+                                       '||snapDateBid||' ' || jobIdCondition || ') O1
+                               INNER JOIN (SELECT
+                                       co_leg_id,
+                                       comp_cd,
+                                       seat_index,
+                                       BID_PRICE_SEAT_INDEX,
+                                       bid_price_amt BID_PRICE_AMT1,
+                                       id,
+									  ROW_NUMBER() over (partition by id,comp_cd order by seat_index DESC) seat_index_rank
+                                FROM  '||bidPriceCurveTblNameSql||' BPC
+                               INNER JOIN ' || TABLE_NAME || ' O
+                                       ON BPC.co_leg_id =
+                                          O.co_leg_id_2
+                                          AND
+                               O.leg_count = 3
+							   AND SEAT_INDEX <= BID_PRICE_SEAT_INDEX
+                               '||snapDateBid||' ' || jobIdCondition || ') O2
+								ON 	O1.id = O2.id
+								AND O1.comp_cd = O2.comp_cd
+								AND O1.seat_index_rank = O2.seat_index_rank
+							  INNER JOIN (SELECT
+                                       co_leg_id,
+                                       comp_cd,
+                                       seat_index,
+                                       BID_PRICE_SEAT_INDEX,
+                                       bid_price_amt BID_PRICE_AMT1,
+                                       id,
+									   ROW_NUMBER() over (partition by id,comp_cd order by seat_index DESC) seat_index_rank
+                                FROM  '||bidPriceCurveTblNameSql||' BPC
+                               INNER JOIN ' || TABLE_NAME || ' O
+                                       ON BPC.co_leg_id =
+                                          O.co_leg_id_3
+                                          AND
+                               O.leg_count = 3
+							   AND SEAT_INDEX <= BID_PRICE_SEAT_INDEX
+                               '||snapDateBid||' ' || jobIdCondition || ') O3
+                                       ON 	O1.id = O3.id
+								AND O1.comp_cd = O3.comp_cd
+								AND O1.seat_index_rank = O3.seat_index_rank) WHERE SEAT_INDEX <= CURRENT_SEAT_INDEX';
+EXECUTE IMMEDIATE insertSqlForTemp2;
+
+g_countOdiSql:= null;
+g_remainingODICount := 0;
+  -- GETTING REMAINING ODI COUNT 
+  g_countOdiSql := 'SELECT CNT.ODI_CNT 
+    FROM   (SELECT Count(*) AS ODI_CNT 
+          FROM '||TABLE_NAME||' 
+          WHERE  cls_cd_f1 = cls_cd_f2
+		  AND cls_cd_f1 ! = cls_cd_f3
+		  And Leg_Count = 3)Cnt'; 
+      
+      dbms_output.put_line(g_countOdiSql);
+      
+  EXECUTE IMMEDIATE (g_countOdiSql) INTO g_remainingODICount; 
+		 Dbms_Output.Put_Line('g_remainingodicount:::' ||G_Remainingodicount); 
+ 
+  IF g_remainingodicount > 0 THEN 
+-- Using bid price fallback
+--001
+insertSqlForTemp2 := 'insert into gtt_odi_avail_seat_t2
+                        (ID, COMP_CD, SEAT_INDEX, CURRENT_SEAT_INDEX, BID_PRICE_AMT)
+                        SELECT ID,COMP_CD,SEAT_INDEX,CURRENT_SEAT_INDEX,BID_PRICE_AMT  FROM (
+                        SELECT O1.id,
+                               O1.comp_cd,
+                               LEAST (O1.seat_index, O2.seat_index, O3.seat_index) SEAT_INDEX,
+                               LEAST( O1.BID_PRICE_SEAT_INDEX, O2.BID_PRICE_SEAT_INDEX, O3.BID_PRICE_SEAT_INDEX ) AS CURRENT_SEAT_INDEX,
+                               (O1.bid_price_amt1 + O2.bid_price_amt1 + O3.bid_price_amt1) AS BID_PRICE_AMT
+                        FROM   (SELECT co_leg_id,
+                                       Decode(BPC.comp_cd, ''C'', ''F'', 
+                                                      ''M'', ''E'') comp_cd,
+                                       seat_index,
+                                       BID_PRICE_SEAT_INDEX,
+                                       bid_price_amt BID_PRICE_AMT1,
+                                       id,
+                                       ROW_NUMBER() over (partition by id,comp_cd order by seat_index DESC) seat_index_rank
+                                FROM   '||bidPriceCurveTblNameSql||' BPC
+                                       INNER JOIN ' || TABLE_NAME || ' O
+                                               ON BPC.co_leg_id =
+                                                  O.co_leg_id_1
+                                                  AND
+                                       O.leg_count = 3
+									   AND SEAT_INDEX <= BID_PRICE_SEAT_INDEX
+                                       '||snapDateBid||' ' || jobIdCondition || ') O1
+                               INNER JOIN (SELECT
+                                       co_leg_id,
+                                       Decode(BPC.comp_cd, ''C'', ''F'', 
+                                                      ''M'', ''E'') comp_cd,
+                                       seat_index,
+                                       BID_PRICE_SEAT_INDEX,
+                                       bid_price_amt BID_PRICE_AMT1,
+                                       id,
+									ROW_NUMBER() over (partition by id,comp_cd order by seat_index DESC) seat_index_rank
+                                FROM  '||bidPriceCurveTblNameSql||' BPC
+                               INNER JOIN ' || TABLE_NAME || ' O
+                                       ON BPC.co_leg_id =
+                                          O.co_leg_id_2
+                                          AND
+                               O.leg_count = 3
+							   AND SEAT_INDEX <= BID_PRICE_SEAT_INDEX
+                               '||snapDateBid||' ' || jobIdCondition || ') O2
+								ON 	O1.id = O2.id
+								AND O1.comp_cd = O2.comp_cd
+								AND O1.seat_index_rank = O2.seat_index_rank
+							  INNER JOIN (SELECT
+                                       co_leg_id,
+                                       comp_cd,
+                                       seat_index,
+                                       BID_PRICE_SEAT_INDEX,
+                                       bid_price_amt BID_PRICE_AMT1,
+                                       id,
+									   ROW_NUMBER() over (partition by id,comp_cd order by seat_index DESC) seat_index_rank
+                                FROM  '||bidPriceCurveTblNameSql||' BPC
+                               INNER JOIN ' || TABLE_NAME || ' O
+                                       ON BPC.co_leg_id =
+                                          O.co_leg_id_3
+                                          AND
+                               O.leg_count = 3
+							   AND SEAT_INDEX <= BID_PRICE_SEAT_INDEX
+                               '||snapDateBid||' ' || jobIdCondition || ') O3
+                                      ON 	O1.id = O3.id
+								AND O1.comp_cd = O3.comp_cd
+								AND O1.seat_index_rank = O3.seat_index_rank) WHERE SEAT_INDEX <= CURRENT_SEAT_INDEX';
+EXECUTE IMMEDIATE insertSqlForTemp2;
+
+--110
+insertSqlForTemp2 := 'insert into gtt_odi_avail_seat_t2
+                        (ID, COMP_CD, SEAT_INDEX, CURRENT_SEAT_INDEX, BID_PRICE_AMT)
+                        SELECT ID,COMP_CD,SEAT_INDEX,CURRENT_SEAT_INDEX,BID_PRICE_AMT  FROM (
+                        SELECT O1.id,
+                               O1.comp_cd,
+                               LEAST (O1.seat_index, O2.seat_index, O3.seat_index) SEAT_INDEX,
+                               LEAST( O1.BID_PRICE_SEAT_INDEX, O2.BID_PRICE_SEAT_INDEX, O3.BID_PRICE_SEAT_INDEX ) AS CURRENT_SEAT_INDEX,
+                               (O1.bid_price_amt1 + O2.bid_price_amt1 + O3.bid_price_amt1) AS BID_PRICE_AMT
+                        FROM   (SELECT co_leg_id,
+                                       comp_cd,
+                                       seat_index,
+                                       BID_PRICE_SEAT_INDEX,
+                                       bid_price_amt BID_PRICE_AMT1,
+                                       id,
+                                       ROW_NUMBER() over (partition by id,comp_cd order by seat_index DESC) seat_index_rank
+                                FROM   '||bidPriceCurveTblNameSql||' BPC
+                                       INNER JOIN ' || TABLE_NAME || ' O
+                                               ON BPC.co_leg_id =
+                                                  O.co_leg_id_1
+                                                  AND
+                                       O.leg_count = 3
+									   AND SEAT_INDEX <= BID_PRICE_SEAT_INDEX
+                                       '||snapDateBid||' ' || jobIdCondition || ') O1
+                               INNER JOIN (SELECT
+                                       co_leg_id,
+                                       comp_cd,
+                                       seat_index,
+                                       BID_PRICE_SEAT_INDEX,
+                                       bid_price_amt BID_PRICE_AMT1,
+                                       id,
+									  ROW_NUMBER() over (partition by id,comp_cd order by seat_index DESC) seat_index_rank
+                                FROM  '||bidPriceCurveTblNameSql||' BPC
+                               INNER JOIN ' || TABLE_NAME || ' O
+                                       ON BPC.co_leg_id =
+                                          O.co_leg_id_2
+                                          AND
+                               O.leg_count = 3
+							   AND SEAT_INDEX <= BID_PRICE_SEAT_INDEX
+                               '||snapDateBid||' ' || jobIdCondition || ') O2
+								ON 	O1.id = O2.id
+								AND O1.comp_cd = O2.comp_cd
+								AND O1.seat_index_rank = O2.seat_index_rank
+							  INNER JOIN (SELECT
+                                       co_leg_id,
+                                       Decode(BPC.comp_cd, ''C'', ''F'', 
+                                                      ''M'', ''E'') comp_cd,
+                                       seat_index,
+                                       BID_PRICE_SEAT_INDEX,
+                                       bid_price_amt BID_PRICE_AMT1,
+                                       id,
+									   ROW_NUMBER() over (partition by id,comp_cd order by seat_index DESC) seat_index_rank
+                                FROM  '||bidPriceCurveTblNameSql||' BPC
+                               INNER JOIN ' || TABLE_NAME || ' O
+                                       ON BPC.co_leg_id =
+                                          O.co_leg_id_3
+                                          AND
+                               O.leg_count = 3
+							   AND SEAT_INDEX <= BID_PRICE_SEAT_INDEX
+                               '||snapDateBid||' ' || jobIdCondition || ') O3
+                                       ON 	O1.id = O3.id
+								AND O1.comp_cd = O3.comp_cd
+								AND O1.seat_index_rank = O3.seat_index_rank) WHERE SEAT_INDEX <= CURRENT_SEAT_INDEX';
+EXECUTE IMMEDIATE insertSqlForTemp2;
+END IF;
+
+g_countOdiSql:= null;
+g_remainingODICount := 0;
+  -- GETTING REMAINING ODI COUNT 
+  g_countOdiSql := 'SELECT CNT.ODI_CNT 
+    FROM   (SELECT Count(*) AS ODI_CNT 
+          FROM '||TABLE_NAME||' 
+          WHERE  cls_cd_f1 != cls_cd_f2
+		  AND cls_cd_f1  = cls_cd_f3
+		  And Leg_Count = 3)Cnt'; 
+      
+      dbms_output.put_line(g_countOdiSql);
+      
+  EXECUTE IMMEDIATE (g_countOdiSql) INTO g_remainingODICount; 
+		 Dbms_Output.Put_Line('g_remainingodicount:::' ||G_Remainingodicount); 
+ 
+  IF g_remainingodicount > 0 THEN 
+--010
+insertSqlForTemp2 := 'insert into gtt_odi_avail_seat_t2
+                        (ID, COMP_CD, SEAT_INDEX, CURRENT_SEAT_INDEX, BID_PRICE_AMT)
+                        SELECT ID,COMP_CD,SEAT_INDEX,CURRENT_SEAT_INDEX,BID_PRICE_AMT  FROM (
+                        SELECT O1.id,
+                               O1.comp_cd,
+                               LEAST (O1.seat_index, O2.seat_index, O3.seat_index) SEAT_INDEX,
+                               LEAST( O1.BID_PRICE_SEAT_INDEX, O2.BID_PRICE_SEAT_INDEX, O3.BID_PRICE_SEAT_INDEX ) AS CURRENT_SEAT_INDEX,
+                               (O1.bid_price_amt1 + O2.bid_price_amt1 + O3.bid_price_amt1) AS BID_PRICE_AMT
+                        FROM   (SELECT co_leg_id,
+                                       Decode(BPC.comp_cd, ''C'', ''F'', 
+                                                      ''M'', ''E'') comp_cd,
+                                       seat_index,
+                                       BID_PRICE_SEAT_INDEX,
+                                       bid_price_amt BID_PRICE_AMT1,
+                                       id,
+                                       ROW_NUMBER() over (partition by id,comp_cd order by seat_index DESC) seat_index_rank
+                                FROM   '||bidPriceCurveTblNameSql||' BPC
+                                       INNER JOIN ' || TABLE_NAME || ' O
+                                               ON BPC.co_leg_id =
+                                                  O.co_leg_id_1
+                                                  AND
+                                       O.leg_count = 3
+									   AND SEAT_INDEX <= BID_PRICE_SEAT_INDEX
+                                       '||snapDateBid||' ' || jobIdCondition || ') O1
+                               INNER JOIN (SELECT
+                                       co_leg_id,
+                                       comp_cd,
+                                       seat_index,
+                                       BID_PRICE_SEAT_INDEX,
+                                       bid_price_amt BID_PRICE_AMT1,
+                                       id,
+										ROW_NUMBER() over (partition by id,comp_cd order by seat_index DESC) seat_index_rank
+                                FROM  '||bidPriceCurveTblNameSql||' BPC
+                               INNER JOIN ' || TABLE_NAME || ' O
+                                       ON BPC.co_leg_id =
+                                          O.co_leg_id_2
+                                          AND
+                               O.leg_count = 3
+							   AND SEAT_INDEX <= BID_PRICE_SEAT_INDEX
+                               '||snapDateBid||' ' || jobIdCondition || ') O2
+								ON 	O1.id = O2.id
+								AND O1.comp_cd = O2.comp_cd
+								AND O1.seat_index_rank = O2.seat_index_rank							   
+							  INNER JOIN (SELECT
+                                       co_leg_id,
+                                       Decode(BPC.comp_cd, ''C'', ''F'', 
+                                                      ''M'', ''E'') comp_cd,
+                                       seat_index,
+                                       BID_PRICE_SEAT_INDEX,
+                                       bid_price_amt BID_PRICE_AMT1,
+                                       id,
+										ROW_NUMBER() over (partition by id,comp_cd order by seat_index DESC) seat_index_rank
+                                FROM  '||bidPriceCurveTblNameSql||' BPC
+                               INNER JOIN ' || TABLE_NAME || ' O
+                                       ON BPC.co_leg_id =
+                                          O.co_leg_id_3
+                                          AND
+                               O.leg_count = 3
+							   AND SEAT_INDEX <= BID_PRICE_SEAT_INDEX
+                               '||snapDateBid||' ' || jobIdCondition || ') O3
+                                       ON 	O1.id = O3.id
+									   AND O1.comp_cd = O3.comp_cd
+								       AND O1.seat_index_rank = O3.seat_index_rank) WHERE SEAT_INDEX <= CURRENT_SEAT_INDEX';
+EXECUTE IMMEDIATE insertSqlForTemp2;
+
+--101
+insertSqlForTemp2 := 'insert into gtt_odi_avail_seat_t2
+                        (ID, COMP_CD, SEAT_INDEX, CURRENT_SEAT_INDEX, BID_PRICE_AMT)
+                        SELECT ID,COMP_CD,SEAT_INDEX,CURRENT_SEAT_INDEX,BID_PRICE_AMT  FROM (
+                        SELECT O1.id,
+                               O1.comp_cd,
+                               LEAST (O1.seat_index, O2.seat_index, O3.seat_index) SEAT_INDEX,
+                               LEAST( O1.BID_PRICE_SEAT_INDEX, O2.BID_PRICE_SEAT_INDEX, O3.BID_PRICE_SEAT_INDEX ) AS CURRENT_SEAT_INDEX,
+                               (O1.bid_price_amt1 + O2.bid_price_amt1 + O3.bid_price_amt1) AS BID_PRICE_AMT
+                        FROM   (SELECT co_leg_id,
+                                       comp_cd,
+                                       seat_index,
+                                       BID_PRICE_SEAT_INDEX,
+                                       bid_price_amt BID_PRICE_AMT1,
+                                       id,
+                                       ROW_NUMBER() over (partition by id,comp_cd order by seat_index DESC) seat_index_rank
+                                FROM   '||bidPriceCurveTblNameSql||' BPC
+                                       INNER JOIN ' || TABLE_NAME || ' O
+                                               ON BPC.co_leg_id =
+                                                  O.co_leg_id_1
+                                                  AND
+                                       O.leg_count = 3
+									   AND SEAT_INDEX <= BID_PRICE_SEAT_INDEX
+                                       '||snapDateBid||' ' || jobIdCondition || ') O1
+                               INNER JOIN (SELECT
+                                       co_leg_id,                                    
+									   Decode(BPC.comp_cd, ''C'', ''F'', 
+                                                      ''M'', ''E'') comp_cd,
+                                       seat_index,
+                                       BID_PRICE_SEAT_INDEX,
+                                       bid_price_amt BID_PRICE_AMT1,
+                                       id,
+                                       ROW_NUMBER() over (partition by id,comp_cd order by seat_index DESC) seat_index_rank
+                                FROM  '||bidPriceCurveTblNameSql||' BPC
+                               INNER JOIN ' || TABLE_NAME || ' O
+                                       ON BPC.co_leg_id =
+                                          O.co_leg_id_2
+                                          AND
+                               O.leg_count = 3
+							   AND SEAT_INDEX <= BID_PRICE_SEAT_INDEX
+                               '||snapDateBid||' ' || jobIdCondition || ') O2
+								ON 	O1.id = O2.id
+								AND O1.comp_cd = O2.comp_cd
+								AND O1.seat_index_rank = O2.seat_index_rank							   
+							  INNER JOIN (SELECT
+                                       co_leg_id,
+                                       comp_cd,
+                                       seat_index,
+                                       BID_PRICE_SEAT_INDEX,
+                                       bid_price_amt BID_PRICE_AMT1,
+                                       id,
+									   ROW_NUMBER() over (partition by id,comp_cd order by seat_index DESC) seat_index_rank
+                                FROM  '||bidPriceCurveTblNameSql||' BPC
+                               INNER JOIN ' || TABLE_NAME || ' O
+                                       ON BPC.co_leg_id =
+                                          O.co_leg_id_3
+                                          AND
+                               O.leg_count = 3
+							   AND SEAT_INDEX <= BID_PRICE_SEAT_INDEX
+                               '||snapDateBid||' ' || jobIdCondition || ') O3
+                                       ON 	O1.id = O3.id
+								AND O1.comp_cd = O3.comp_cd
+								AND O1.seat_index_rank = O3.seat_index_rank) WHERE SEAT_INDEX <= CURRENT_SEAT_INDEX';
+EXECUTE IMMEDIATE insertSqlForTemp2;
+
+END IF;
+
+g_countOdiSql:= null;
+g_remainingODICount := 0;
+  -- GETTING REMAINING ODI COUNT 
+  g_countOdiSql := 'SELECT CNT.ODI_CNT 
+    FROM   (SELECT Count(*) AS ODI_CNT 
+          FROM '||TABLE_NAME||' 
+          WHERE  cls_cd_f1 != cls_cd_f2
+		  AND cls_cd_f2  = cls_cd_f3
+		  And Leg_Count = 3)Cnt'; 
+      
+      dbms_output.put_line(g_countOdiSql);
+      
+  EXECUTE IMMEDIATE (g_countOdiSql) INTO g_remainingODICount; 
+		 Dbms_Output.Put_Line('g_remainingodicount:::' ||G_Remainingodicount); 
+ 
+  IF g_remainingodicount > 0 THEN 
+--011
+insertSqlForTemp2 := 'insert into gtt_odi_avail_seat_t2
+                        (ID, COMP_CD, SEAT_INDEX, CURRENT_SEAT_INDEX, BID_PRICE_AMT)
+                        SELECT ID,COMP_CD,SEAT_INDEX,CURRENT_SEAT_INDEX,BID_PRICE_AMT  FROM (
+                        SELECT O1.id,
+                               O1.comp_cd,
+                               LEAST (O1.seat_index, O2.seat_index, O3.seat_index) SEAT_INDEX,
+                               LEAST( O1.BID_PRICE_SEAT_INDEX, O2.BID_PRICE_SEAT_INDEX, O3.BID_PRICE_SEAT_INDEX ) AS CURRENT_SEAT_INDEX,
+                               (O1.bid_price_amt1 + O2.bid_price_amt1 + O3.bid_price_amt1) AS BID_PRICE_AMT
+                        FROM   (SELECT co_leg_id,
+                                       Decode(BPC.comp_cd, ''C'', ''F'', 
+                                                      ''M'', ''E'') comp_cd,
+                                       seat_index,
+                                       BID_PRICE_SEAT_INDEX,
+                                       bid_price_amt BID_PRICE_AMT1,
+                                       id,
+                                       ROW_NUMBER() over (partition by id,comp_cd order by seat_index DESC) seat_index_rank
+                                FROM   '||bidPriceCurveTblNameSql||' BPC
+                                       INNER JOIN ' || TABLE_NAME || ' O
+                                               ON BPC.co_leg_id =
+                                                  O.co_leg_id_1
+                                                  AND
+                                       O.leg_count = 3
+									   AND SEAT_INDEX <= BID_PRICE_SEAT_INDEX
+                                       '||snapDateBid||' ' || jobIdCondition || ') O1
+                               INNER JOIN (SELECT
+                                       co_leg_id,
+                                       comp_cd,
+                                       seat_index,
+                                       BID_PRICE_SEAT_INDEX,
+                                       bid_price_amt BID_PRICE_AMT1,
+                                       id,
+									  ROW_NUMBER() over (partition by id,comp_cd order by seat_index DESC) seat_index_rank
+                                FROM  '||bidPriceCurveTblNameSql||' BPC
+                               INNER JOIN ' || TABLE_NAME || ' O
+                                       ON BPC.co_leg_id =
+                                          O.co_leg_id_2
+                                          AND
+                               O.leg_count = 3
+							   AND SEAT_INDEX <= BID_PRICE_SEAT_INDEX
+                               '||snapDateBid||' ' || jobIdCondition || ') O2
+								ON 	O1.id = O2.id
+								AND O1.comp_cd = O2.comp_cd
+								AND O1.seat_index_rank = O2.seat_index_rank							   
+							  INNER JOIN (SELECT
+                                       co_leg_id,
+                                       comp_cd,
+                                       seat_index,
+                                       BID_PRICE_SEAT_INDEX,
+                                       bid_price_amt BID_PRICE_AMT1,
+                                       id,
+									   ROW_NUMBER() over (partition by id,comp_cd order by seat_index DESC) seat_index_rank
+                                FROM  '||bidPriceCurveTblNameSql||' BPC
+                               INNER JOIN ' || TABLE_NAME || ' O
+                                       ON BPC.co_leg_id =
+                                          O.co_leg_id_3
+                                          AND
+                               O.leg_count = 3
+							   AND SEAT_INDEX <= BID_PRICE_SEAT_INDEX
+                               '||snapDateBid||' ' || jobIdCondition || ') O3
+                                       ON 	O1.id = O3.id
+								AND O1.comp_cd = O3.comp_cd
+								AND O1.seat_index_rank = O3.seat_index_rank) WHERE SEAT_INDEX <= CURRENT_SEAT_INDEX';
+EXECUTE IMMEDIATE insertSqlForTemp2;
+
+--100
+insertSqlForTemp2 := 'insert into gtt_odi_avail_seat_t2
+                        (ID, COMP_CD, SEAT_INDEX, CURRENT_SEAT_INDEX, BID_PRICE_AMT)
+                        SELECT ID,COMP_CD,SEAT_INDEX,CURRENT_SEAT_INDEX,BID_PRICE_AMT  FROM (
+                        SELECT O1.id,
+                               O1.comp_cd,
+                               LEAST (O1.seat_index, O2.seat_index, O3.seat_index) SEAT_INDEX,
+                               LEAST( O1.BID_PRICE_SEAT_INDEX, O2.BID_PRICE_SEAT_INDEX, O3.BID_PRICE_SEAT_INDEX ) AS CURRENT_SEAT_INDEX,
+                               (O1.bid_price_amt1 + O2.bid_price_amt1 + O3.bid_price_amt1) AS BID_PRICE_AMT
+                        FROM   (SELECT co_leg_id,
+                                       comp_cd,
+                                       seat_index,
+                                       BID_PRICE_SEAT_INDEX,
+                                       bid_price_amt BID_PRICE_AMT1,
+                                       id,
+                                       ROW_NUMBER() over (partition by id,comp_cd order by seat_index DESC) seat_index_rank
+                                FROM   '||bidPriceCurveTblNameSql||' BPC
+                                       INNER JOIN ' || TABLE_NAME || ' O
+                                               ON BPC.co_leg_id =
+                                                  O.co_leg_id_1
+                                                  AND
+                                       O.leg_count = 3
+									   AND SEAT_INDEX <= BID_PRICE_SEAT_INDEX
+                                       '||snapDateBid||' ' || jobIdCondition || ') O1
+                               INNER JOIN (SELECT
+                                       co_leg_id,                                    
+									   Decode(BPC.comp_cd, ''C'', ''F'', 
+                                                      ''M'', ''E'') comp_cd,
+                                       seat_index,
+                                       BID_PRICE_SEAT_INDEX,
+                                       bid_price_amt BID_PRICE_AMT1,
+                                       id,
+									   ROW_NUMBER() over (partition by id,comp_cd order by seat_index DESC) seat_index_rank
+                                FROM  '||bidPriceCurveTblNameSql||' BPC
+                               INNER JOIN ' || TABLE_NAME || ' O
+                                       ON BPC.co_leg_id =
+                                          O.co_leg_id_2
+                                          AND
+                               O.leg_count = 3
+							   AND SEAT_INDEX <= BID_PRICE_SEAT_INDEX
+                               '||snapDateBid||' ' || jobIdCondition || ') O2
+									ON 	O1.id = O2.id
+								AND O1.comp_cd = O2.comp_cd
+								AND O1.seat_index_rank = O2.seat_index_rank							   
+							  INNER JOIN (SELECT
+                                       co_leg_id,
+                                       Decode(BPC.comp_cd, ''C'', ''F'', 
+                                                      ''M'', ''E'') comp_cd,
+                                       seat_index,
+                                       BID_PRICE_SEAT_INDEX,
+                                       bid_price_amt BID_PRICE_AMT1,
+                                       id,
+									   ROW_NUMBER() over (partition by id,comp_cd order by seat_index DESC) seat_index_rank
+                                FROM  '||bidPriceCurveTblNameSql||' BPC
+                               INNER JOIN ' || TABLE_NAME || ' O
+                                       ON BPC.co_leg_id =
+                                          O.co_leg_id_3
+                                          AND
+                               O.leg_count = 3
+							   AND SEAT_INDEX <= BID_PRICE_SEAT_INDEX
+                               '||snapDateBid||' ' || jobIdCondition || ') O3
+                                       ON 	O1.id = O3.id
+								AND O1.comp_cd = O3.comp_cd
+								AND O1.seat_index_rank = O3.seat_index_rank) WHERE SEAT_INDEX <= CURRENT_SEAT_INDEX';
+EXECUTE IMMEDIATE insertSqlForTemp2;
+
+END IF;
+
+selectAvailSeatSql := 'SELECT odi_id,
+  comp_cd,
+  cls_cd,
+  bdaf_amt,
+  bid_price_amt,
+  avail_seats,
+  SEG_LIMIT_AMT
+FROM
+  (SELECT R.odi_id,
+    R.comp_cd,
+    R.cls_cd,
+    R.bdaf_amt,
+    R.bid_price_amt,
+    LEAST( curr_seat_index - seat_index , SL - PAX_BKD) + 1 AVAIL_SEATS,
+	SL SEG_LIMIT_AMT,
+    Row_number() over ( PARTITION BY R.odi_id, R.comp_cd, R.cls_cd ORDER BY R.seat_index ) AS RN
+  FROM
+    (SELECT P.id AS ODI_ID,
+      P.comp_cd  AS COMP_CD,
+      B.cls_cd   AS CLS_CD,
+      B.bdaf_amt,
+      P.bid_price_amt AS BID_PRICE_AMT,
+      curr_seat_index,
+      seat_index,
+      SEG_LIMIT_AMT SL,
+      PAX_BKD_AMT PAX_BKD
+    FROM gtt_odi_avail_seat_t1 SL
+    INNER JOIN gtt_odi_bdaf B
+    ON B.odi_id  = SL.id
+    AND B.cls_cd = SL.cls_cd
+    INNER JOIN
+      (SELECT id ID,
+        comp_cd COMP_CD,
+        seat_index,
+        CURRENT_SEAT_INDEX as CURR_SEAT_INDEX,
+        bid_price_amt,
+        MIN(P.bid_price_amt) over ( PARTITION BY P.id, P.comp_cd) AS CURR_BID_PRICE
+      FROM gtt_odi_avail_seat_t2 P
+      ) P ON B.odi_id     = P.id
+    AND B.comp_cd         = P.comp_cd
+    WHERE B.bdaf_amt      > P.curr_bid_price
+	AND SL.LEG_COUNT = 3
+    )R
+  WHERE R.bdaf_amt > R.bid_price_amt
+  )T
+WHERE rn = 1';
+
+OPEN cur_c FOR selectAvailSeatSql;
+LOOP
+  FETCH cur_c bulk COLLECT
+  INTO g_rec1,
+    g_rec2,
+    g_rec3,
+    g_rec4,
+    g_rec5,
+    g_rec6,
+	g_rec7	LIMIT 200000;
+  forall i IN 1..g_rec1.count
+  INSERT
+  INTO GTT_ODI_AVAIL_SEAT 
+  (ODI_ID,COMP_CD,CLS_CD,BDAF_AMT,BID_PRICE_AMT,AVAIL_SEATS,SEG_LIMIT_AMT)
+  VALUES
+    (
+      g_rec1(i),
+      g_rec2(i),
+      g_rec3(i),
+      g_rec4(i),
+      g_rec5(i),
+      g_rec6(i),
+	  g_rec7(i)
+    );
+  EXIT
+WHEN g_rec1.count = 0;
+END LOOP;
+CLOSE cur_c;
+END IF;
+prc_RETURN_INFO := 'SUCCESS';
+DBMS_OUTPUT.PUT_LINE(prc_RETURN_INFO);
+EXCEPTION
+WHEN OTHERS THEN
+  l_sqlcode       := SQLCODE;
+  l_sqlerrm       := SUBSTR(SQLERRM,1,100);
+  l_line_number := null;
+  l_line_number   := SUBSTR(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE, instr(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE,' ',-1,1)+1, LENGTH(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE) );
+  prc_RETURN_INFO := l_sqlcode || ' ' || l_sqlerrm;
+  pkg_error_log.sp_app_error_log('COMPUTE_AVAIL_SEAT_LEG_CNT_3', l_sqlcode, l_sqlerrm, 'COMPUTE_AVAIL_SEAT_LEG_CNT_3 : Error during insert', SYS_CONTEXT('USERENV','OS_USER'), l_line_number);
+END COMPUTE_AVAIL_SEAT_LEG_CNT_3;
+END COMPUTE_AVAIL_SEAT;
+/

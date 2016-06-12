@@ -1,0 +1,1127 @@
+create or replace PACKAGE BODY COMPUTE_SYSTEM_BDAF
+AS
+    insertCCSQL VARCHAR2(15000);
+    classCodeCondition VARCHAR2(1000);
+    jobIdCondition VARCHAR2(100);
+    posRow varchar2(50);
+    posSql varchar2(20);
+    posCond varchar2(20);
+	odiPosBaseODISql VARCHAR2(50);
+	rPosBaseODISql VARCHAR(100);
+	oPosBaseODISql VARCHAR(100);
+	insertBDAFSql VARCHAR2(100);
+    l_sqlcode varchar2(100);
+    l_sqlerrm varchar2(200);
+    l_line_number varchar2(5);
+    v_procedure_name varchar2(50);
+    insertCASQL VARCHAR2(5000);
+	g_noFillupCondition  VARCHAR2(1000);
+
+
+PROCEDURE COMPUTE_SYS_BDAF_LEG_CNT_1
+(
+CLASS_CODES IN StringArray,
+TABLE_NAME IN VARCHAR2,
+JOB_ID IN NUMBER,
+CAV_REDUCTION_TYPE_REQ IN NUMBER,
+prc_RETURN_INFO  OUT VARCHAR2
+) AS
+
+/***************************************************************************************************
+   * Define Variables
+   ***************************************************************************************************/
+
+    -- INSERT BDAF FOR COUNTRY/COUNTRY GENERIC YIELD MAPPING
+
+    BEGIN
+
+    insertCCSQL := null;
+    classCodeCondition := null;
+	 odiPosBaseODISql := null;
+	 rPosBaseODISql := null;
+   posCond := null;
+   posSql := null;
+  posRow := null;
+	oPosBaseODISql := null;
+	insertBDAFSql := null;
+	jobIdCondition := null;
+    l_sqlcode := null;
+    l_sqlerrm := null;
+    l_line_number := null;
+    v_procedure_name := null;
+	g_noFillupCondition := null;
+
+         classCodeCondition := CASE WHEN(CLASS_CODES.count >0)
+      THEN ' AND B.CLS_CD '  || GET_CLS_CD_QUERY_STR(CLASS_CODES)  ELSE '' END;
+
+      	 jobIdCondition := CASE WHEN (JOB_ID > -2)
+      THEN ' AND JOB_ID = '|| JOB_ID ELSE '' END ;
+
+	  IF (JOB_ID > -2) THEN
+    	  insertBDAFSql := 'ODI_SYSTEM_BDAF';
+	  odiPosBaseODISql := ',POS,BASE_ODI,JOB_ID';
+    	--DBMS_OUTPUT.put_line(odiPosBaseODISql);
+	  rPosBaseODISql := ',R.POS ,R.BASE_ODI ,R.JOB_ID';
+    	--DBMS_OUTPUT.put_line(rPosBaseODISql);
+	  oPosBaseODISql := ' ,B.POB_CD as POS ,O.BASE_ODI ,O.JOB_ID';
+     posRow := ' IN (O.ORIGIN_CNTY,O.DEST_CNTY,O.POS)';
+    posSql := ' , B.POB_CD ';
+    posCond := ' , POB_CD';
+    
+	  ELSE
+	  insertBDAFSql := 'GTT_ODI_SYSTEM_BDAF';
+	  odiPosBaseODISql := '';
+	  rPosBaseODISql := '';
+     posRow := ' = O.POS';
+     posSql := '';
+     posCond := '';
+	  oPosBaseODISql := '';
+	  END IF;
+  	/*STEP 1: INSERT BDAF INTO VOLATILE ODI_BDAF TABLE */
+-- Step :1a
+
+ -- DO NOT GET SBDAF VALUE FOR NO FILLUP CLASSES
+  g_noFillupCondition := 
+  CASE 
+  WHEN (CAV_REDUCTION_TYPE_REQ = 1 AND JOB_ID = -2) THEN
+	' INNER JOIN GTT_ODI_CAV CAV ON (CAV.ODI_ID  = R.ID AND CAV.CLS_CD = R.CLS_CD) '
+  WHEN (CAV_REDUCTION_TYPE_REQ = 1 AND JOB_ID > -2) THEN
+	' INNER JOIN ODI_CAV CAV ON (CAV.ODI_ID  = R.ID AND CAV.CLS_CD = R.CLS_CD) AND CAV.JOB_ID = '||JOB_ID|| ''  
+	ELSE  
+	''
+ END;
+
+    insertCCSQL  :=
+    'INSERT INTO ' || insertBDAFSql || '
+	 SELECT ODI_ID, CLS_CD, BDAF_AMT,COMP_CD ' || odiPosBaseODISql || '
+	 FROM ( SELECT R.ID AS ODI_ID,
+				   R.CLS_CD AS CLS_CD,
+				   R.BDAF_AMT_FINAL AS BDAF_AMT,
+				   N.COMP_CD AS COMP_CD,
+				   ROW_NUMBER() OVER (PARTITION BY R.ID, R.CLS_CD '|| rPosBaseODISql || '  ORDER BY R.ORIG_DEST_RANK, R.POS_RANK, R.FLT_NUM_RANK ) AS RANK
+				   ' || rPosBaseODISql || '
+				  FROM (SELECT /*+ parallel(4) */ O.ID AS ID,
+							  B.CLS_CD AS CLS_CD,
+							  B.BDAF_AMT AS BDAF_AMT_FINAL,
+							  DECODE(B.POB_CD, ''YY'', 2, 1) as POS_RANK,
+							  DECODE(B.ORIG_CD || B.DEST_CD, O.ORIGIN || O.DESTINATION, 1, 2) as ORIG_DEST_RANK,
+							  1 as FLT_NUM_RANK '|| oPosBaseODISql || '
+						 FROM RM_BDAF_ACTUAL_COMPRESSED B
+						 INNER JOIN '|| TABLE_NAME ||' O ON (O.LEG_COUNT = 1 AND ((B.ORIG_CD=O.ORIGIN AND B.DEST_CD=O.DESTINATION) OR (B.ORIG_CD=O.ORIGIN_CTY AND B.DEST_CD=O.DEST_CTY))
+						AND O.SCHED_LOC_DEP_DT1 BETWEEN B.FIRST_TRVL_BEG_DT AND B.LAST_TRVL_END_DT
+						AND INSTR(B.DOW_ID, TRUNC(SCHED_LOC_DEP_DT1) - TRUNC (SCHED_LOC_DEP_DT1, ''IW'') + 1) > 0)
+						WHERE (B.POB_CD '|| posRow || ' OR B.POB_CD =''YY'')
+						AND B.VIA_CD IS NULL
+            '|| jobIdCondition ||'
+						AND B.FLT_1_NUM = O.FLT_NUM1 AND B.AIRL_1_CD = O.OPER_AIRL_CD1
+						' || classCodeCondition || '
+							UNION ALL
+						SELECT /*+ parallel(4) */ O.ID AS ID,
+							  B.CLS_CD AS CLS_CD,
+							  B.BDAF_AMT AS BDAF_AMT_FINAL,
+							  DECODE(B.POB_CD, ''YY'', 2, 1) as POS_RANK,
+							  DECODE(B.ORIG_CD || B.DEST_CD, O.ORIGIN || O.DESTINATION, 1, 2) as ORIG_DEST_RANK,
+							  2 as FLT_NUM_RANK ' || oPosBaseODISql || '
+						 FROM RM_BDAF_ACTUAL_COMPRESSED B
+						 INNER JOIN '|| TABLE_NAME ||' O ON (O.LEG_COUNT = 1 AND ((B.ORIG_CD=O.ORIGIN AND B.DEST_CD=O.DESTINATION) OR (B.ORIG_CD=O.ORIGIN_CTY AND B.DEST_CD=O.DEST_CTY))
+						AND O.SCHED_LOC_DEP_DT1 BETWEEN B.FIRST_TRVL_BEG_DT AND B.LAST_TRVL_END_DT
+						AND INSTR(B.DOW_ID, TRUNC(SCHED_LOC_DEP_DT1) - TRUNC (SCHED_LOC_DEP_DT1, ''IW'') + 1) > 0)
+						WHERE (B.POB_CD '|| posRow || ' OR B.POB_CD =''YY'')
+						AND B.VIA_CD IS NULL
+            '|| jobIdCondition ||'
+						AND B.FLT_1_NUM IS NULL  AND B.AIRL_1_CD IS NULL
+
+
+						' || classCodeCondition || '
+						) R
+					INNER JOIN RM_LH_CLS_NESTING N ON N.CLS_CD = R.CLS_CD '||g_noFillupCondition||' )
+						WHERE RANK = 1';
+		DBMS_OUTPUT.put_line(insertCCSQL);
+   EXECUTE IMMEDIATE (insertCCSQL);
+
+
+ prc_RETURN_INFO := 'SUCCESS';
+  EXCEPTION
+  WHEN OTHERS THEN
+
+    prc_RETURN_INFO:= l_sqlcode||' '||l_sqlerrm;
+    l_sqlcode := SQLCODE;
+   l_sqlerrm := SUBSTR(SQLERRM,1,100);
+   l_line_number := substr(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE,
+                           instr(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE,' ',-1,1)+1,
+                           length(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE)
+                          );
+   v_procedure_name := $$PLSQL_UNIT;
+   pkg_error_log.sp_app_error_log('COMPUTE_SYS_BDAF_LEG_CNT_1',
+                                  l_sqlcode,
+                                  l_sqlerrm,
+                                  v_procedure_name,
+                                  SYS_CONTEXT('USERENV','OS_USER'),
+                                  l_line_number);
+
+END;
+
+PROCEDURE COMPUTE_SYS_BDAF_LEG_CNT_2
+(
+CLASS_CODES IN StringArray,
+TABLE_NAME IN VARCHAR2,
+JOB_ID IN NUMBER,
+CAV_REDUCTION_TYPE_REQ IN NUMBER,
+prc_RETURN_INFO  OUT VARCHAR2
+) AS
+
+/***************************************************************************************************
+   * Define Variables
+ ***************************************************************************************************/
+
+    -- INSERT BDAF FOR COUNTRY/COUNTRY GENERIC YIELD MAPPING
+
+BEGIN
+
+posCond := null;
+posSql := null;
+  posRow := null;
+	insertCCSQL := null;
+    classCodeCondition := null;
+	odiPosBaseODISql := null;
+	rPosBaseODISql := null;
+	oPosBaseODISql := null;
+	insertBDAFSql := null;
+	jobIdCondition := null;
+    l_sqlcode := null;
+    l_sqlerrm := null;
+    l_line_number := null;
+    v_procedure_name := null;
+	g_noFillupCondition := null;
+
+         classCodeCondition := CASE WHEN(CLASS_CODES.count >0)
+      THEN ' AND B.CLS_CD '  || GET_CLS_CD_QUERY_STR(CLASS_CODES)  ELSE '' END;
+
+      	 jobIdCondition := CASE WHEN (JOB_ID > -2)
+      THEN ' AND JOB_ID = '|| JOB_ID ELSE '' END ;
+
+	  IF(JOB_ID > -2) THEN
+	  insertBDAFSql := 'ODI_SYSTEM_BDAF';
+	  odiPosBaseODISql := ',POS,BASE_ODI,JOB_ID';
+	  rPosBaseODISql := ',R.POS AS POS,R.BASE_ODI AS BASE_ODI,R.JOB_ID AS JOB_ID';
+	  oPosBaseODISql := ' ,O.POS AS POS,O.BASE_ODI AS BASE_ODI,O.JOB_ID AS JOB_ID';
+    posRow := ' IN (O.ORIGIN_CNTY,O.DEST_CNTY,O.POS)';
+    posSql := ' , B.POB_CD ';
+    posCond := ' , POB_CD';
+	  ELSE
+	  insertBDAFSql := 'GTT_ODI_SYSTEM_BDAF';
+	  odiPosBaseODISql := '';
+	  rPosBaseODISql := '';
+	  oPosBaseODISql := '';
+     posRow := ' = O.POS';
+     posSql := '';
+     posCond := '';
+	  END IF;
+	  
+	   -- DO NOT GET SBDAF VALUE FOR NO FILLUP CLASSES
+  g_noFillupCondition := 
+  CASE 
+  WHEN (CAV_REDUCTION_TYPE_REQ = 1 AND JOB_ID = -2) THEN
+	' INNER JOIN GTT_ODI_CAV CAV ON (CAV.ODI_ID  = R.ODI_ID AND CAV.CLS_CD = R.CLS_CD) '
+	WHEN (CAV_REDUCTION_TYPE_REQ = 1 AND JOB_ID > -2) THEN
+	' INNER JOIN ODI_CAV CAV ON (CAV.ODI_ID  = R.ODI_ID AND CAV.CLS_CD = R.CLS_CD) AND CAV.JOB_ID = '||JOB_ID||''
+	ELSE  
+	''
+ END;
+
+    /*STEP 1: INSERT BDAF INTO VOLATILE ODI_BDAF TABLE */
+-- Step :1a
+    insertCCSQL :=
+    'INSERT INTO GTT_ODI_SYSTEM_BDAF_LEG_2 (ODI_ID, CLS_CD, BDAF_AMT, RANK '|| posCond || ')
+	(
+	SELECT ODI_ID, CLS_CD, BDAF_AMT, 1 '|| posCond || '
+	FROM (  SELECT R.ID AS ODI_ID,
+					   R.CLS_CD AS CLS_CD,
+					   R.BDAF_AMT_FINAL AS BDAF_AMT,
+					   ROW_NUMBER() OVER (PARTITION BY R.ID, R.CLS_CD '|| posCond || ' ORDER BY TMPRANK ) AS RANK '|| posCond || '
+				  FROM(SELECT /*+ INDEX(B IDX_RBAC_05) */ O.ID AS ID,
+							 B.CLS_CD AS CLS_CD,
+							 B.BDAF_AMT AS BDAF_AMT_FINAL,
+							 DECODE(B.VIA_CD, ''*'', 3, ''???'', 2, 1) as TMPRANK '|| posSql ||'
+						FROM RM_BDAF_ACTUAL_COMPRESSED B
+						INNER JOIN '|| TABLE_NAME ||' O ON O.LEG_COUNT = 2 AND (B.ORIG_CD=O.ORIGIN
+												 AND B.DEST_CD=O.DESTINATION)
+						AND O.SCHED_LOC_DEP_DT1 BETWEEN B.FIRST_TRVL_BEG_DT AND B.LAST_TRVL_END_DT
+						AND	 INSTR(B.DOW_ID, TRUNC(SCHED_LOC_DEP_DT1) - TRUNC (SCHED_LOC_DEP_DT1, ''IW'') + 1) > 0
+						WHERE B.POB_CD ' || posRow || '
+						AND (B.VIA_CD = O.VIA OR B.VIA_CD =''???'' or B.VIA_CD =''*'')
+						AND B.FLT_1_NUM =O.FLT_NUM1
+						AND B.AIRL_1_CD =O.OPER_AIRL_CD1
+						AND B.FLT_2_NUM =O.FLT_NUM2
+						'|| jobIdCondition ||'
+						AND B.AIRL_2_CD =O.OPER_AIRL_CD2
+						' || classCodeCondition || ' ) R
+						 )
+						WHERE RANK = 1
+	UNION ALL
+	SELECT ODI_ID, CLS_CD, BDAF_AMT, 2 '|| posCond || '
+
+	FROM (  SELECT R.ID AS ODI_ID,
+					   R.CLS_CD AS CLS_CD,
+					   R.BDAF_AMT_FINAL AS BDAF_AMT,
+					   ROW_NUMBER() OVER (PARTITION BY R.ID, R.CLS_CD '|| posCond || ' ORDER BY TMPRANK ) AS RANK '|| posCond || '
+				  FROM(SELECT /*+ INDEX(B IDX_RBAC_05) */ O.ID AS ID,
+							 B.CLS_CD AS CLS_CD,
+							 B.BDAF_AMT AS BDAF_AMT_FINAL,
+							 DECODE(B.VIA_CD, ''*'', 3, ''???'', 2, 1) as TMPRANK '|| posSql ||'
+						FROM RM_BDAF_ACTUAL_COMPRESSED B
+						INNER JOIN '|| TABLE_NAME ||' O ON O.LEG_COUNT = 2 AND (B.ORIG_CD=O.ORIGIN
+												 AND B.DEST_CD=O.DESTINATION)
+						AND O.SCHED_LOC_DEP_DT1 BETWEEN B.FIRST_TRVL_BEG_DT AND B.LAST_TRVL_END_DT
+						AND	 INSTR(B.DOW_ID, TRUNC(SCHED_LOC_DEP_DT1) - TRUNC (SCHED_LOC_DEP_DT1, ''IW'') + 1) > 0
+						WHERE B.POB_CD ' || posRow || '
+						AND (B.VIA_CD = O.VIA OR B.VIA_CD =''???'' or B.VIA_CD =''*'')
+						AND B.FLT_1_NUM IS NULL
+						AND B.AIRL_1_CD IS NULL
+						AND B.FLT_2_NUM IS NULL
+						  '|| jobIdCondition ||'
+						AND B.AIRL_2_CD IS NULL
+						' || classCodeCondition || ' ) R
+					 )
+					 WHERE RANK = 1
+	 UNION ALL
+	 SELECT ODI_ID, CLS_CD, BDAF_AMT, 3 '|| posCond || '
+	 FROM ( SELECT R.ID AS ODI_ID,
+					   R.CLS_CD AS CLS_CD,
+					   R.BDAF_AMT_FINAL AS BDAF_AMT,
+					   ROW_NUMBER() OVER (PARTITION BY R.ID, R.CLS_CD '|| posCond || ' ORDER BY TMPRANK ) AS RANK '|| posCond || '
+
+
+				  FROM(SELECT /*+ INDEX(B IDX_RBAC_05) */ O.ID AS ID,
+							 B.CLS_CD AS CLS_CD,
+							 B.BDAF_AMT AS BDAF_AMT_FINAL,
+							 DECODE(B.VIA_CD, ''*'', 3, ''???'', 2, 1) as TMPRANK '|| posSql ||'
+						FROM RM_BDAF_ACTUAL_COMPRESSED B
+						INNER JOIN '|| TABLE_NAME ||' O ON O.LEG_COUNT = 2 AND (B.ORIG_CD=O.ORIGIN
+												 AND B.DEST_CD=O.DESTINATION)
+						AND O.SCHED_LOC_DEP_DT1 BETWEEN B.FIRST_TRVL_BEG_DT AND B.LAST_TRVL_END_DT
+						AND	 INSTR(B.DOW_ID, TRUNC(SCHED_LOC_DEP_DT1) - TRUNC (SCHED_LOC_DEP_DT1, ''IW'') + 1) > 0
+						WHERE B.POB_CD =''YY''
+						AND (B.VIA_CD = O.VIA OR B.VIA_CD =''???'' or B.VIA_CD =''*'')
+						AND B.FLT_1_NUM =O.FLT_NUM1
+						AND B.AIRL_1_CD =O.OPER_AIRL_CD1
+						AND B.FLT_2_NUM =O.FLT_NUM2
+						  '|| jobIdCondition ||'
+						AND B.AIRL_2_CD =O.OPER_AIRL_CD2
+						' || classCodeCondition || ' ) R
+					  )
+					  WHERE RANK = 1
+	UNION ALL
+	SELECT ODI_ID, CLS_CD, BDAF_AMT, 4 '|| posCond || '
+	FROM (  SELECT R.ID AS ODI_ID,
+					   R.CLS_CD AS CLS_CD,
+					   R.BDAF_AMT_FINAL AS BDAF_AMT,
+
+					   ROW_NUMBER() OVER (PARTITION BY R.ID, R.CLS_CD '|| posCond || ' ORDER BY TMPRANK ) AS RANK '|| posCond || '
+				  FROM(SELECT /*+ INDEX(B IDX_RBAC_05) */ O.ID AS ID,
+							 B.CLS_CD AS CLS_CD,
+							 B.BDAF_AMT AS BDAF_AMT_FINAL,
+							 DECODE(B.VIA_CD, ''*'', 3, ''???'', 2, 1) as TMPRANK '|| posSql ||'
+						FROM RM_BDAF_ACTUAL_COMPRESSED B
+						INNER JOIN '|| TABLE_NAME ||' O ON O.LEG_COUNT = 2 AND (B.ORIG_CD=O.ORIGIN
+												 AND B.DEST_CD=O.DESTINATION)
+						AND O.SCHED_LOC_DEP_DT1 BETWEEN B.FIRST_TRVL_BEG_DT AND B.LAST_TRVL_END_DT
+						AND	 INSTR(B.DOW_ID, TRUNC(SCHED_LOC_DEP_DT1) - TRUNC (SCHED_LOC_DEP_DT1, ''IW'') + 1) > 0
+						WHERE B.POB_CD =''YY''
+						AND (B.VIA_CD = O.VIA OR B.VIA_CD =''???'' or B.VIA_CD =''*'')
+						AND B.FLT_1_NUM IS NULL
+						AND B.AIRL_1_CD IS NULL
+						AND B.FLT_2_NUM IS NULL
+						  '|| jobIdCondition ||'
+						AND B.AIRL_2_CD IS NULL
+						' || classCodeCondition || ' ) R
+						)
+					    WHERE RANK = 1
+	UNION ALL
+	SELECT ODI_ID, CLS_CD, BDAF_AMT, 5 '|| posCond || '
+	FROM (  SELECT R.ID AS ODI_ID,
+					   R.CLS_CD AS CLS_CD,
+					   R.BDAF_AMT_FINAL AS BDAF_AMT,
+					   ROW_NUMBER() OVER (PARTITION BY R.ID, R.CLS_CD '|| posCond || ' ORDER BY TMPRANK ) AS RANK '|| posCond || '
+				  FROM(SELECT /*+ INDEX(B IDX_RBAC_05) */ O.ID AS ID,
+							 B.CLS_CD AS CLS_CD,
+							 B.BDAF_AMT AS BDAF_AMT_FINAL,
+							 DECODE(B.VIA_CD, ''*'', 3, ''???'', 2, 1) as TMPRANK '|| posSql ||'
+						FROM RM_BDAF_ACTUAL_COMPRESSED B
+						INNER JOIN '|| TABLE_NAME ||' O ON O.LEG_COUNT = 2 AND (B.ORIG_CD=O.ORIGIN_CTY
+                                                AND B.DEST_CD=O.DEST_CTY)
+						AND O.SCHED_LOC_DEP_DT1 BETWEEN B.FIRST_TRVL_BEG_DT AND B.LAST_TRVL_END_DT
+						AND	 INSTR(B.DOW_ID, TRUNC(SCHED_LOC_DEP_DT1) - TRUNC (SCHED_LOC_DEP_DT1, ''IW'') + 1) > 0
+						WHERE B.POB_CD ' || posRow || '
+						AND (B.VIA_CD = O.VIA OR B.VIA_CD =''???'' or B.VIA_CD =''*'')
+						AND B.FLT_1_NUM =O.FLT_NUM1
+
+						AND B.AIRL_1_CD =O.OPER_AIRL_CD1
+						AND B.FLT_2_NUM =O.FLT_NUM2
+						  '|| jobIdCondition ||'
+						AND B.AIRL_2_CD =O.OPER_AIRL_CD2
+						' || classCodeCondition || ' ) R
+						)
+						WHERE RANK = 1
+	UNION ALL
+	SELECT ODI_ID, CLS_CD, BDAF_AMT, 6 '|| posCond || '
+
+	FROM (  SELECT R.ID AS ODI_ID,
+					   R.CLS_CD AS CLS_CD,
+					   R.BDAF_AMT_FINAL AS BDAF_AMT,
+					   ROW_NUMBER() OVER (PARTITION BY R.ID, R.CLS_CD '|| posCond || ' ORDER BY TMPRANK ) AS RANK '|| posCond || '
+				  FROM(SELECT /*+ INDEX(B IDX_RBAC_05) */ O.ID AS ID,
+							 B.CLS_CD AS CLS_CD,
+							 B.BDAF_AMT AS BDAF_AMT_FINAL,
+							 DECODE(B.VIA_CD, ''*'', 3, ''???'', 2, 1) as TMPRANK '|| posSql ||'
+						FROM RM_BDAF_ACTUAL_COMPRESSED B
+						INNER JOIN '|| TABLE_NAME ||' O ON O.LEG_COUNT = 2 AND (B.ORIG_CD=O.ORIGIN_CTY
+                                                AND B.DEST_CD=O.DEST_CTY)
+
+						AND O.SCHED_LOC_DEP_DT1 BETWEEN B.FIRST_TRVL_BEG_DT AND B.LAST_TRVL_END_DT
+						AND	 INSTR(B.DOW_ID, TRUNC(SCHED_LOC_DEP_DT1) - TRUNC (SCHED_LOC_DEP_DT1, ''IW'') + 1) > 0
+						WHERE B.POB_CD ' || posRow || '
+						AND (B.VIA_CD = O.VIA OR B.VIA_CD =''???'' or B.VIA_CD =''*'')
+						AND B.FLT_1_NUM IS NULL
+						AND B.AIRL_1_CD IS NULL
+						AND B.FLT_2_NUM IS NULL
+						  '|| jobIdCondition ||'
+						AND B.AIRL_2_CD IS NULL
+						' || classCodeCondition || ' ) R
+						)
+						WHERE RANK = 1
+	UNION ALL
+	SELECT ODI_ID, CLS_CD, BDAF_AMT, 7 '|| posCond || '
+	FROM (  SELECT R.ID AS ODI_ID,
+					   R.CLS_CD AS CLS_CD,
+					   R.BDAF_AMT_FINAL AS BDAF_AMT,
+					   ROW_NUMBER() OVER (PARTITION BY R.ID, R.CLS_CD '|| posCond || ' ORDER BY TMPRANK ) AS RANK '|| posCond || '
+				  FROM(SELECT /*+  INDEX(B IDX_RBAC_05) */ O.ID AS ID,
+							 B.CLS_CD AS CLS_CD,
+							 B.BDAF_AMT AS BDAF_AMT_FINAL,
+							 DECODE(B.VIA_CD, ''*'', 3, ''???'', 2, 1) as TMPRANK '|| posSql ||'
+						FROM RM_BDAF_ACTUAL_COMPRESSED B
+						INNER JOIN '|| TABLE_NAME ||' O ON O.LEG_COUNT = 2 AND (B.ORIG_CD=O.ORIGIN_CTY
+                                                AND B.DEST_CD=O.DEST_CTY)
+						AND O.SCHED_LOC_DEP_DT1 BETWEEN B.FIRST_TRVL_BEG_DT AND B.LAST_TRVL_END_DT
+						AND	 INSTR(B.DOW_ID, TRUNC(SCHED_LOC_DEP_DT1) - TRUNC (SCHED_LOC_DEP_DT1, ''IW'') + 1) > 0
+						WHERE B.POB_CD =''YY''
+						AND (B.VIA_CD = O.VIA OR B.VIA_CD =''???'' or B.VIA_CD =''*'')
+
+
+						AND B.FLT_1_NUM =O.FLT_NUM1
+						AND B.AIRL_1_CD =O.OPER_AIRL_CD1
+						AND B.FLT_2_NUM =O.FLT_NUM2
+						'|| jobIdCondition ||'
+						AND B.AIRL_2_CD =O.OPER_AIRL_CD2
+						' || classCodeCondition || ' ) R
+						)
+						WHERE RANK = 1
+	UNION ALL
+	SELECT ODI_ID, CLS_CD, BDAF_AMT, 8 '|| posCond || '
+	FROM ( SELECT R.ID AS ODI_ID,
+					   R.CLS_CD AS CLS_CD,
+					   R.BDAF_AMT_FINAL AS BDAF_AMT,
+					   ROW_NUMBER() OVER (PARTITION BY R.ID, R.CLS_CD '|| posCond || ' ORDER BY TMPRANK ) AS RANK '|| posCond || '
+				  FROM(SELECT /*+   INDEX(B IDX_RBAC_05) */ O.ID AS ID,
+							 B.CLS_CD AS CLS_CD,
+							 B.BDAF_AMT AS BDAF_AMT_FINAL,
+							 DECODE(B.VIA_CD, ''*'', 3, ''???'', 2, 1) as TMPRANK '|| posSql ||'
+						FROM RM_BDAF_ACTUAL_COMPRESSED B
+						INNER JOIN '|| TABLE_NAME ||' O ON O.LEG_COUNT = 2 AND (B.ORIG_CD=O.ORIGIN_CTY
+                                                AND B.DEST_CD=O.DEST_CTY)
+						AND O.SCHED_LOC_DEP_DT1 BETWEEN B.FIRST_TRVL_BEG_DT AND B.LAST_TRVL_END_DT
+						AND	 INSTR(B.DOW_ID, TRUNC(SCHED_LOC_DEP_DT1) - TRUNC (SCHED_LOC_DEP_DT1, ''IW'') + 1) > 0
+						WHERE B.POB_CD =''YY''
+						AND (B.VIA_CD = O.VIA OR B.VIA_CD =''???'' or B.VIA_CD =''*'')
+						AND B.FLT_1_NUM IS NULL
+						AND B.AIRL_1_CD IS NULL
+						AND B.FLT_2_NUM IS NULL
+						  '|| jobIdCondition ||'
+						AND B.AIRL_2_CD IS NULL
+						' || classCodeCondition || '  ) R
+						)
+						WHERE RANK = 1)';
+
+   EXECUTE IMMEDIATE (insertCCSQL);
+prc_RETURN_INFO :=  'Step 4b::Successfully Executed';
+ insertCCSQL := null;
+IF(JOB_ID >-2) THEN
+insertCCSQL := 'INSERT INTO ODI_SYSTEM_BDAF(ODI_ID, CLS_CD, BDAF_AMT, COMP_CD,JOB_ID, POS)
+select ODI_ID, CLS_CD, BDAF_AMT, COMP_CD,'|| JOB_ID|| ' , POS from (
+       SELECT  R.ODI_ID,
+             R.CLS_CD,
+             R.BDAF_AMT,
+             N.COMP_CD,
+             R.POS
+       FROM
+             (
+                    SELECT /*+PARALLEL(GTT_ODI_SYSTEM_BDAF_LEG_2 , 4) */
+                           ODI_ID,
+                           CLS_CD,
+                           BDAF_AMT, ROW_NUMBER() OVER (PARTITION BY ODI_ID, CLS_CD '|| posCond || ' ORDER BY RANK) AS RANK, POB_CD AS POS
+                    FROM GTT_ODI_SYSTEM_BDAF_LEG_2
+             ) R
+       INNER JOIN RM_LH_CLS_NESTING N ON N.CLS_CD = R.CLS_CD '||g_noFillupCondition||' 
+  WHERE RANK = 1
+)';
+
+ELSE
+
+insertCCSQL := 'INSERT INTO GTT_ODI_SYSTEM_BDAF(ODI_ID, CLS_CD, BDAF_AMT, COMP_CD)
+select   ODI_ID, CLS_CD, BDAF_AMT, COMP_CD  from (
+       SELECT       R.ODI_ID,
+             R.CLS_CD,
+             R.BDAF_AMT,
+             N.COMP_CD
+       FROM
+             (
+                    SELECT /*+PARALLEL(GTT_ODI_SYSTEM_BDAF_LEG_2 , 4) */
+                           ODI_ID,
+                           CLS_CD,
+                           BDAF_AMT, ROW_NUMBER() OVER (PARTITION BY ODI_ID, CLS_CD ORDER BY RANK) AS RANK
+                    FROM GTT_ODI_SYSTEM_BDAF_LEG_2
+             ) R
+       INNER JOIN RM_LH_CLS_NESTING N ON N.CLS_CD = R.CLS_CD '||g_noFillupCondition||' 
+  WHERE RANK = 1
+)';
+
+END IF;
+
+EXECUTE IMMEDIATE insertCCSQL;
+ prc_RETURN_INFO := 'SUCCESS';
+
+EXCEPTION
+WHEN OTHERS THEN
+
+    prc_RETURN_INFO:= l_sqlcode||' '||l_sqlerrm;
+    l_sqlcode := SQLCODE;
+   l_sqlerrm := SUBSTR(SQLERRM,1,100);
+   l_line_number := substr(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE,
+                           instr(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE,' ',-1,1)+1,
+                           length(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE)
+                          );
+   v_procedure_name := $$PLSQL_UNIT;
+   pkg_error_log.sp_app_error_log('COMPUTE_SYS_BDAF_LEG_CNT_2',
+                                  l_sqlcode,
+                                  l_sqlerrm,
+                                  v_procedure_name,
+                                  SYS_CONTEXT('USERENV','OS_USER'),
+                                  l_line_number);
+
+END;
+
+PROCEDURE COMPUTE_SYS_BDAF_LEG_CNT_3
+(
+CLASS_CODES IN StringArray,
+TABLE_NAME IN VARCHAR2,
+JOB_ID IN NUMBER,
+CAV_REDUCTION_TYPE_REQ IN NUMBER,
+prc_RETURN_INFO  OUT VARCHAR2
+) AS
+
+/***************************************************************************************************
+   * Define Variables
+ ***************************************************************************************************/
+
+    -- INSERT BDAF FOR COUNTRY/COUNTRY GENERIC YIELD MAPPING
+BEGIN
+  insertCCSQL := null;
+    classCodeCondition := null;
+	odiPosBaseODISql := null;
+	rPosBaseODISql := null;
+	oPosBaseODISql := null;
+	insertBDAFSql := null;
+	jobIdCondition := null;
+    l_sqlcode := null;
+    l_sqlerrm := null;
+    l_line_number := null;
+    v_procedure_name := null;
+    posCond := null;
+    posSql := null;
+    posRow := null;
+	g_noFillupCondition := null;
+
+         classCodeCondition := CASE WHEN(CLASS_CODES.count >0)
+      THEN ' AND B.CLS_CD '  || GET_CLS_CD_QUERY_STR(CLASS_CODES)  ELSE '' END;
+
+      	 jobIdCondition := CASE WHEN (JOB_ID > -2)
+      THEN ' AND JOB_ID = '|| JOB_ID ELSE '' END ;
+
+	  IF(JOB_ID > -2) THEN
+	  insertBDAFSql := 'ODI_SYSTEM_BDAF';
+	  odiPosBaseODISql := ',POS,BASE_ODI,JOB_ID';
+	  rPosBaseODISql := ',R.POS AS POS,R.BASE_ODI AS BASE_ODI,R.JOB_ID AS JOB_ID';
+	  oPosBaseODISql := ' ,O.POS AS POS,O.BASE_ODI AS BASE_ODI,O.JOB_ID AS JOB_ID';
+      posRow := ' IN (O.ORIGIN_CNTY,O.DEST_CNTY,O.POS)';
+    posSql := ' , B.POB_CD ';
+    posCond := ' , POB_CD';
+	  ELSE
+	  insertBDAFSql := 'GTT_ODI_SYSTEM_BDAF';
+	  odiPosBaseODISql := '';
+	  rPosBaseODISql := '';
+	  oPosBaseODISql := '';
+    posRow := ' = O.POS';
+     posSql := '';
+     posCond := '';
+	  END IF;
+	   -- DO NOT GET SBDAF VALUE FOR NO FILLUP CLASSES
+  g_noFillupCondition := 
+  CASE 
+  WHEN (CAV_REDUCTION_TYPE_REQ = 1 AND JOB_ID = -2) THEN
+	' INNER JOIN GTT_ODI_CAV CAV ON (CAV.ODI_ID  = R.ODI_ID AND CAV.CLS_CD = R.CLS_CD) '
+	WHEN (CAV_REDUCTION_TYPE_REQ = 1 AND JOB_ID > -2) THEN
+	' INNER JOIN ODI_CAV CAV ON (CAV.ODI_ID  = R.ODI_ID AND CAV.CLS_CD = R.CLS_CD) AND CAV.JOB_ID = '||JOB_ID||''
+	ELSE  
+	''
+ END;
+
+/*STEP 1: INSERT BDAF INTO VOLATILE ODI_BDAF TABLE */
+-- Step :1a
+insertCCSQL :=
+    'INSERT INTO GTT_ODI_SYSTEM_BDAF_LEG_3 (ODI_ID, CLS_CD, BDAF_AMT, RANK '|| posCond || ')
+	SELECT ODI_ID, CLS_CD, BDAF_AMT,1 '|| posCond || '
+
+	FROM (  SELECT R.ID AS ODI_ID,
+					   R.CLS_CD AS CLS_CD,
+					   R.BDAF_AMT_FINAL AS BDAF_AMT,
+					   ROW_NUMBER() OVER (PARTITION BY R.ID, R.CLS_CD '|| posCond || ' ORDER BY TMPRANK ) AS RANK '|| posCond || '
+
+
+				  FROM(SELECT O.ID AS ID,
+							 B.CLS_CD AS CLS_CD,
+							 B.BDAF_AMT AS BDAF_AMT_FINAL,
+							 DECODE(B.VIA_CD, ''*'', 4, ''???'', 3, O.VIA1, 2, 1) as TMPRANK
+          '|| posSql ||'
+						FROM RM_BDAF_ACTUAL_COMPRESSED B
+						INNER JOIN '|| TABLE_NAME ||' O ON O.LEG_COUNT = 3 AND (B.ORIG_CD=O.ORIGIN
+												 AND B.DEST_CD=O.DESTINATION)
+						AND O.SCHED_LOC_DEP_DT1 BETWEEN B.FIRST_TRVL_BEG_DT AND B.LAST_TRVL_END_DT
+						AND	 INSTR(B.DOW_ID, TRUNC(SCHED_LOC_DEP_DT1) - TRUNC (SCHED_LOC_DEP_DT1, ''IW'') + 1) > 0
+						WHERE B.POB_CD ' || posRow || '
+						AND (B.VIA_CD = O.VIA OR B.VIA_CD =O.VIA1 OR B.VIA_CD =''???'' or B.VIA_CD =''*'')
+
+						AND B.FLT_1_NUM =O.FLT_NUM1
+						AND B.AIRL_1_CD =O.OPER_AIRL_CD1
+						AND B.FLT_2_NUM =O.FLT_NUM2
+						AND B.AIRL_2_CD =O.OPER_AIRL_CD2
+						AND B.FLT_3_NUM =O.FLT_NUM3
+						' || jobIdCondition || '
+						AND B.AIRL_3_CD =O.OPER_AIRL_CD3
+						' || classCodeCondition || ' ) R
+					INNER JOIN RM_LH_CLS_NESTING N ON N.CLS_CD = R.CLS_CD )
+						WHERE RANK = 1
+
+						UNION ALL
+SELECT ODI_ID, CLS_CD, BDAF_AMT,2 '|| posCond || '
+
+	FROM (  SELECT R.ID AS ODI_ID,
+					   R.CLS_CD AS CLS_CD,
+					   R.BDAF_AMT_FINAL AS BDAF_AMT,
+					   ROW_NUMBER() OVER (PARTITION BY R.ID, R.CLS_CD '|| posCond || ' ORDER BY TMPRANK ) AS RANK '|| posCond || '
+
+
+				  FROM(SELECT  O.ID AS ID,
+							 B.CLS_CD AS CLS_CD,
+							 B.BDAF_AMT AS BDAF_AMT_FINAL,
+							 DECODE(B.VIA_CD, ''*'', 4, ''???'', 3, O.VIA1, 2, 1) as TMPRANK
+            '|| posSql ||'
+						FROM RM_BDAF_ACTUAL_COMPRESSED B
+						INNER JOIN '|| TABLE_NAME ||' O ON O.LEG_COUNT = 3 AND (B.ORIG_CD=O.ORIGIN
+												 AND B.DEST_CD=O.DESTINATION)
+						AND O.SCHED_LOC_DEP_DT1 BETWEEN B.FIRST_TRVL_BEG_DT AND B.LAST_TRVL_END_DT
+						AND	 INSTR(B.DOW_ID, TRUNC(SCHED_LOC_DEP_DT1) - TRUNC (SCHED_LOC_DEP_DT1, ''IW'') + 1) > 0
+						WHERE B.POB_CD ' || posRow || '
+						AND (B.VIA_CD = O.VIA OR B.VIA_CD =O.VIA1 OR B.VIA_CD =''???'' or B.VIA_CD =''*'')
+
+						AND B.FLT_1_NUM IS NULL
+						AND B.AIRL_1_CD IS NULL
+						AND B.FLT_2_NUM IS NULL
+						AND B.AIRL_2_CD IS NULL
+						AND B.FLT_3_NUM IS NULL
+						' || jobIdCondition || '
+						AND B.AIRL_3_CD IS NULL
+						' || classCodeCondition || ' ) R
+					INNER JOIN RM_LH_CLS_NESTING N ON N.CLS_CD = R.CLS_CD  )
+						WHERE RANK = 1
+
+						UNION ALL
+SELECT ODI_ID, CLS_CD, BDAF_AMT,3 '|| posCond || '
+
+	FROM ( SELECT R.ID AS ODI_ID,
+					   R.CLS_CD AS CLS_CD,
+					   R.BDAF_AMT_FINAL AS BDAF_AMT,
+					   ROW_NUMBER() OVER (PARTITION BY R.ID, R.CLS_CD '|| posCond || ' ORDER BY TMPRANK ) AS RANK '|| posCond || '
+
+
+				  FROM(SELECT  O.ID AS ID,
+							 B.CLS_CD AS CLS_CD,
+							 B.BDAF_AMT AS BDAF_AMT_FINAL,
+							 DECODE(B.VIA_CD, ''*'', 4, ''???'', 3, O.VIA1, 2, 1) as TMPRANK
+              '|| posSql ||'
+
+						FROM RM_BDAF_ACTUAL_COMPRESSED B
+
+
+
+						INNER JOIN '|| TABLE_NAME ||' O ON O.LEG_COUNT = 3 AND (B.ORIG_CD=O.ORIGIN
+												 AND B.DEST_CD=O.DESTINATION)
+						AND O.SCHED_LOC_DEP_DT1 BETWEEN B.FIRST_TRVL_BEG_DT AND B.LAST_TRVL_END_DT
+						AND	 INSTR(B.DOW_ID, TRUNC(SCHED_LOC_DEP_DT1) - TRUNC (SCHED_LOC_DEP_DT1, ''IW'') + 1) > 0
+						WHERE B.POB_CD =''YY''
+						AND (B.VIA_CD = O.VIA OR B.VIA_CD =O.VIA1 OR B.VIA_CD =''???'' or B.VIA_CD =''*'')
+
+
+						AND B.FLT_1_NUM =O.FLT_NUM1
+						AND B.AIRL_1_CD =O.OPER_AIRL_CD1
+						AND B.FLT_2_NUM =O.FLT_NUM2
+						AND B.AIRL_2_CD =O.OPER_AIRL_CD2
+						AND B.FLT_3_NUM =O.FLT_NUM3
+						' || jobIdCondition || '
+						AND B.AIRL_3_CD =O.OPER_AIRL_CD3
+						' || classCodeCondition || ' ) R
+					INNER JOIN RM_LH_CLS_NESTING N ON N.CLS_CD = R.CLS_CD )
+						WHERE RANK = 1
+
+						UNION ALL
+SELECT ODI_ID, CLS_CD, BDAF_AMT,4 '|| posCond || '
+
+	FROM ( SELECT R.ID AS ODI_ID,
+					   R.CLS_CD AS CLS_CD,
+					   R.BDAF_AMT_FINAL AS BDAF_AMT,
+					   ROW_NUMBER() OVER (PARTITION BY R.ID, R.CLS_CD '|| posCond || ' ORDER BY TMPRANK ) AS RANK '|| posCond || '
+
+
+				  FROM(SELECT  O.ID AS ID,
+							 B.CLS_CD AS CLS_CD,
+							 B.BDAF_AMT AS BDAF_AMT_FINAL,
+							 DECODE(B.VIA_CD, ''*'', 4, ''???'', 3, O.VIA1, 2, 1) as TMPRANK
+                '|| posSql ||'
+
+						FROM RM_BDAF_ACTUAL_COMPRESSED B
+
+
+
+						INNER JOIN '|| TABLE_NAME ||' O ON O.LEG_COUNT = 3 AND (B.ORIG_CD=O.ORIGIN
+												 AND B.DEST_CD=O.DESTINATION)
+						AND O.SCHED_LOC_DEP_DT1 BETWEEN B.FIRST_TRVL_BEG_DT AND B.LAST_TRVL_END_DT
+						AND	 INSTR(B.DOW_ID, TRUNC(SCHED_LOC_DEP_DT1) - TRUNC (SCHED_LOC_DEP_DT1, ''IW'') + 1) > 0
+						WHERE B.POB_CD =''YY''
+						AND (B.VIA_CD = O.VIA OR B.VIA_CD =O.VIA1 OR B.VIA_CD =''???'' or B.VIA_CD =''*'')
+
+
+						AND B.FLT_1_NUM IS NULL
+						AND B.AIRL_1_CD IS NULL
+						AND B.FLT_2_NUM IS NULL
+						AND B.AIRL_2_CD IS NULL
+						AND B.FLT_3_NUM IS NULL
+						' || jobIdCondition || '
+						AND B.AIRL_3_CD IS NULL
+						' || classCodeCondition || ' ) R
+					INNER JOIN RM_LH_CLS_NESTING N ON N.CLS_CD = R.CLS_CD )
+						WHERE RANK = 1
+
+						UNION ALL
+SELECT ODI_ID, CLS_CD, BDAF_AMT,5 '|| posCond || '
+
+	FROM (  SELECT R.ID AS ODI_ID,
+					   R.CLS_CD AS CLS_CD,
+					   R.BDAF_AMT_FINAL AS BDAF_AMT,
+					   ROW_NUMBER() OVER (PARTITION BY R.ID, R.CLS_CD '|| posCond || ' ORDER BY TMPRANK ) AS RANK '|| posCond || '
+
+
+				  FROM(SELECT  O.ID AS ID,
+							 B.CLS_CD AS CLS_CD,
+							 B.BDAF_AMT AS BDAF_AMT_FINAL,
+							 DECODE(B.VIA_CD, ''*'', 4, ''???'', 3, O.VIA1, 2, 1) as TMPRANK
+               '|| posSql ||'
+						FROM RM_BDAF_ACTUAL_COMPRESSED B
+
+
+
+						INNER JOIN '|| TABLE_NAME ||' O ON O.LEG_COUNT = 3 AND (B.ORIG_CD=O.ORIGIN_CTY
+                                                AND B.DEST_CD=O.DEST_CTY)
+						AND O.SCHED_LOC_DEP_DT1 BETWEEN B.FIRST_TRVL_BEG_DT AND B.LAST_TRVL_END_DT
+						AND	 INSTR(B.DOW_ID, TRUNC(SCHED_LOC_DEP_DT1) - TRUNC (SCHED_LOC_DEP_DT1, ''IW'') + 1) > 0
+						WHERE B.POB_CD ' || posRow || '
+						AND (B.VIA_CD = O.VIA OR B.VIA_CD =O.VIA1 OR B.VIA_CD =''???'' or B.VIA_CD =''*'')
+
+						AND B.FLT_1_NUM =O.FLT_NUM1
+						AND B.AIRL_1_CD =O.OPER_AIRL_CD1
+						AND B.FLT_2_NUM =O.FLT_NUM2
+						AND B.AIRL_2_CD =O.OPER_AIRL_CD2
+						AND B.FLT_3_NUM =O.FLT_NUM3
+						' || jobIdCondition || '
+						AND B.AIRL_3_CD =O.OPER_AIRL_CD3
+						' || classCodeCondition || ' ) R
+					INNER JOIN RM_LH_CLS_NESTING N ON N.CLS_CD = R.CLS_CD )
+						WHERE RANK = 1
+
+						UNION ALL
+SELECT ODI_ID, CLS_CD, BDAF_AMT,6 '|| posCond || '
+
+	FROM ( SELECT R.ID AS ODI_ID,
+					   R.CLS_CD AS CLS_CD,
+					   R.BDAF_AMT_FINAL AS BDAF_AMT,
+					   ROW_NUMBER() OVER (PARTITION BY R.ID, R.CLS_CD '|| posCond || ' ORDER BY TMPRANK ) AS RANK '|| posCond || '
+
+
+				  FROM ( SELECT  O.ID AS ID,
+							 B.CLS_CD AS CLS_CD,
+							 B.BDAF_AMT AS BDAF_AMT_FINAL,
+							 DECODE(B.VIA_CD, ''*'', 4, ''???'', 3, O.VIA1, 2, 1) as TMPRANK
+            '|| posSql ||'
+						FROM RM_BDAF_ACTUAL_COMPRESSED B
+
+
+
+						INNER JOIN '|| TABLE_NAME ||' O ON O.LEG_COUNT = 3 AND (B.ORIG_CD=O.ORIGIN_CTY
+                                                AND B.DEST_CD=O.DEST_CTY)
+						AND O.SCHED_LOC_DEP_DT1 BETWEEN B.FIRST_TRVL_BEG_DT AND B.LAST_TRVL_END_DT
+						AND	 INSTR(B.DOW_ID, TRUNC(SCHED_LOC_DEP_DT1) - TRUNC (SCHED_LOC_DEP_DT1, ''IW'') + 1) > 0
+						WHERE B.POB_CD ' || posRow || '
+						AND (B.VIA_CD = O.VIA OR B.VIA_CD =O.VIA1 OR B.VIA_CD =''???'' or B.VIA_CD =''*'')
+
+						AND B.FLT_1_NUM IS NULL
+						AND B.AIRL_1_CD IS NULL
+						AND B.FLT_2_NUM IS NULL
+						AND B.AIRL_2_CD IS NULL
+						AND B.FLT_3_NUM IS NULL
+						' || jobIdCondition || '
+						AND B.AIRL_3_CD IS NULL
+						' || classCodeCondition || ' ) R
+					INNER JOIN RM_LH_CLS_NESTING N ON N.CLS_CD = R.CLS_CD  )
+						WHERE RANK = 1
+
+					UNION ALL
+	SELECT ODI_ID, CLS_CD, BDAF_AMT,7 '|| posCond || '
+
+	FROM (  SELECT R.ID AS ODI_ID,
+					   R.CLS_CD AS CLS_CD,
+					   R.BDAF_AMT_FINAL AS BDAF_AMT,
+					   ROW_NUMBER() OVER (PARTITION BY R.ID, R.CLS_CD '|| posCond || ' ORDER BY TMPRANK ) AS RANK '|| posCond || '
+
+
+				  FROM(SELECT  O.ID AS ID,
+							 B.CLS_CD AS CLS_CD,
+							 B.BDAF_AMT AS BDAF_AMT_FINAL,
+							 DECODE(B.VIA_CD, ''*'', 4, ''???'', 3, O.VIA1, 2, 1) as TMPRANK
+              '|| posSql ||'
+
+						FROM RM_BDAF_ACTUAL_COMPRESSED B
+
+
+
+						INNER JOIN '|| TABLE_NAME ||' O ON O.LEG_COUNT = 3 AND (B.ORIG_CD=O.ORIGIN_CTY
+                                                AND B.DEST_CD=O.DEST_CTY)
+						AND O.SCHED_LOC_DEP_DT1 BETWEEN B.FIRST_TRVL_BEG_DT AND B.LAST_TRVL_END_DT
+						AND	 INSTR(B.DOW_ID, TRUNC(SCHED_LOC_DEP_DT1) - TRUNC (SCHED_LOC_DEP_DT1, ''IW'') + 1) > 0
+						WHERE B.POB_CD =''YY''
+						AND (B.VIA_CD = O.VIA OR B.VIA_CD =O.VIA1 OR B.VIA_CD =''???'' or B.VIA_CD =''*'')
+
+
+						AND B.FLT_1_NUM =O.FLT_NUM1
+						AND B.AIRL_1_CD =O.OPER_AIRL_CD1
+						AND B.FLT_2_NUM =O.FLT_NUM2
+						AND B.AIRL_2_CD =O.OPER_AIRL_CD2
+						AND B.FLT_3_NUM =O.FLT_NUM3
+						' || jobIdCondition || '
+						AND B.AIRL_3_CD =O.OPER_AIRL_CD3
+						' || classCodeCondition || ' ) R
+					INNER JOIN RM_LH_CLS_NESTING N ON N.CLS_CD = R.CLS_CD  )
+						WHERE RANK = 1
+
+						UNION ALL
+SELECT ODI_ID, CLS_CD, BDAF_AMT,8 '|| posCond || '
+
+	FROM (  SELECT R.ID AS ODI_ID,
+					   R.CLS_CD AS CLS_CD,
+					   R.BDAF_AMT_FINAL AS BDAF_AMT,
+					   ROW_NUMBER() OVER (PARTITION BY R.ID, R.CLS_CD '|| posCond || ' ORDER BY TMPRANK ) AS RANK '|| posCond || '
+
+
+				  FROM(SELECT  O.ID AS ID,
+							 B.CLS_CD AS CLS_CD,
+							 B.BDAF_AMT AS BDAF_AMT_FINAL,
+							 DECODE(B.VIA_CD, ''*'', 4, ''???'', 3, O.VIA1, 2, 1) as TMPRANK
+              '|| posSql ||'
+
+						FROM RM_BDAF_ACTUAL_COMPRESSED B
+
+
+
+						INNER JOIN '|| TABLE_NAME ||' O ON O.LEG_COUNT = 3 AND (B.ORIG_CD=O.ORIGIN_CTY
+                                                AND B.DEST_CD=O.DEST_CTY)
+						AND O.SCHED_LOC_DEP_DT1 BETWEEN B.FIRST_TRVL_BEG_DT AND B.LAST_TRVL_END_DT
+						AND	 INSTR(B.DOW_ID, TRUNC(SCHED_LOC_DEP_DT1) - TRUNC (SCHED_LOC_DEP_DT1, ''IW'') + 1) > 0
+						WHERE B.POB_CD =''YY''
+						AND (B.VIA_CD = O.VIA OR B.VIA_CD =O.VIA1 OR B.VIA_CD =''???'' or B.VIA_CD =''*'')
+
+
+						AND B.FLT_1_NUM IS NULL
+						AND B.AIRL_1_CD IS NULL
+						AND B.FLT_2_NUM IS NULL
+						AND B.AIRL_2_CD IS NULL
+						AND B.FLT_3_NUM IS NULL
+						' || jobIdCondition || '
+						AND B.AIRL_3_CD IS NULL
+						' || classCodeCondition || ' ) R
+					 )
+						WHERE RANK = 1';
+
+	--DBMS_OUTPUT.put_line(insertCCSQL);
+   EXECUTE IMMEDIATE (insertCCSQL);
+
+   insertCCSQL := NULL;
+prc_RETURN_INFO := 'Step 4b::Successfully Executed';
+IF(JOB_ID >-2) THEN
+
+ insertCCSQL := 'INSERT INTO ODI_SYSTEM_BDAF(ODI_ID, CLS_CD, BDAF_AMT, COMP_CD,JOB_ID, POS)
+		select   ODI_ID, CLS_CD, BDAF_AMT, COMP_CD, '|| JOB_ID || ' , POS from (
+		       SELECT       R.ODI_ID,
+		             R.CLS_CD,
+		             R.BDAF_AMT,
+		             N.COMP_CD ,
+                R.POS
+		       FROM
+		             (
+		                    SELECT /*+PARALLEL(GTT_ODI_SYSTEM_BDAF_LEG_3 , 4) */
+		                           ODI_ID,
+		                           CLS_CD,
+		                           BDAF_AMT, ROW_NUMBER() OVER (PARTITION BY ODI_ID, CLS_CD '|| posCond || ' ORDER BY RANK) AS RANK
+                               , POB_CD AS POS
+		                    FROM GTT_ODI_SYSTEM_BDAF_LEG_3
+		             ) R
+		       INNER JOIN RM_LH_CLS_NESTING N ON N.CLS_CD = R.CLS_CD '||g_noFillupCondition||' 
+		  WHERE RANK = 1
+		) ';
+    DBMS_OUTPUT.put_line(insertCCSQL);
+ EXECUTE IMMEDIATE (insertCCSQL);
+ELSE
+insertCCSQL := 'INSERT INTO GTT_ODI_SYSTEM_BDAF(ODI_ID, CLS_CD, BDAF_AMT, COMP_CD)
+select   ODI_ID, CLS_CD, BDAF_AMT, COMP_CD  from (
+       SELECT       R.ODI_ID,
+             R.CLS_CD,
+             R.BDAF_AMT,
+             N.COMP_CD
+       FROM
+             (
+                    SELECT /*+PARALLEL(GTT_ODI_SYSTEM_BDAF_LEG_3 , 4) */
+                           ODI_ID,
+                           CLS_CD,
+                           BDAF_AMT, ROW_NUMBER() OVER (PARTITION BY ODI_ID, CLS_CD ORDER BY RANK) AS RANK
+                    FROM GTT_ODI_SYSTEM_BDAF_LEG_3
+             ) R
+       INNER JOIN RM_LH_CLS_NESTING N ON N.CLS_CD = R.CLS_CD '||g_noFillupCondition||' 
+  WHERE RANK = 1
+)';
+ EXECUTE IMMEDIATE (insertCCSQL);
+--DBMS_OUTPUT.put_line(insertCCSQL);
+  END IF;
+ prc_RETURN_INFO := 'SUCCESS';
+
+ EXCEPTION
+  WHEN OTHERS THEN
+
+
+    prc_RETURN_INFO:= l_sqlcode||' '||l_sqlerrm;
+    l_sqlcode := SQLCODE;
+   l_sqlerrm := SUBSTR(SQLERRM,1,100);
+   l_line_number := substr(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE,
+                           instr(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE,' ',-1,1)+1,
+                           length(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE)
+                          );
+   v_procedure_name := $$PLSQL_UNIT;
+   pkg_error_log.sp_app_error_log('COMPUTE_SYS_BDAF_LEG_CNT_3',
+                                  l_sqlcode,
+                                  l_sqlerrm,
+                                  v_procedure_name,
+                                  SYS_CONTEXT('USERENV','OS_USER'),
+                                  l_line_number);
+
+END;
+
+
+PROCEDURE COMPUTE_SYS_BDAF_FALL_BACK
+(
+CLASS_CODES IN StringArray,
+TABLE_NAME IN VARCHAR2,
+JOB_ID IN NUMBER,
+CAV_REDUCTION_TYPE_REQ IN NUMBER,
+prc_RETURN_INFO  OUT VARCHAR2
+) AS
+
+/***************************************************************************************************
+   * Define Variables
+   ***************************************************************************************************/
+
+    BEGIN
+
+    insertCCSQL := null;
+    classCodeCondition := null;
+	odiPosBaseODISql := null;
+	rPosBaseODISql := null;
+	oPosBaseODISql := null;
+	insertBDAFSql := null;
+  posCond := null;
+  posSql := null;
+  posRow := null;
+	jobIdCondition := null;
+    l_sqlcode := null;
+    l_sqlerrm := null;
+    l_line_number := null;
+    v_procedure_name := null;
+	g_noFillupCondition := null;
+
+         classCodeCondition := CASE WHEN(CLASS_CODES.count >0)
+      THEN ' AND B.CLS_CD '  || GET_CLS_CD_QUERY_STR(CLASS_CODES)  ELSE '' END;
+
+      	 jobIdCondition := CASE WHEN (JOB_ID > -2)
+      THEN ' AND JOB_ID = '|| JOB_ID ELSE '' END ;
+
+	  IF(JOB_ID > -2) THEN
+	  insertBDAFSql := 'ODI_SYSTEM_BDAF';
+	  odiPosBaseODISql := ',POS,BASE_ODI,JOB_ID';
+	  rPosBaseODISql := ',R.POS AS POS,R.BASE_ODI AS BASE_ODI,R.JOB_ID AS JOB_ID';
+	  oPosBaseODISql := ' ,O.POS AS POS,O.BASE_ODI AS BASE_ODI,O.JOB_ID AS JOB_ID';
+    posRow := ' IN (O.ORIGIN_CNTY,O.DEST_CNTY,O.POS)';
+    posSql := ' , B.POB_CD ';
+    posCond := ' , POB_CD';
+	  ELSE
+	  insertBDAFSql := 'GTT_ODI_SYSTEM_BDAF';
+	  odiPosBaseODISql := '';
+	  rPosBaseODISql := '';
+	  oPosBaseODISql := '';
+    posRow := ' = O.POS';
+    posSql := '';
+    posCond := '';
+	  END IF;
+	   -- DO NOT GET SBDAF VALUE FOR NO FILLUP CLASSES
+  g_noFillupCondition := 
+  CASE 
+  WHEN (CAV_REDUCTION_TYPE_REQ = 1 AND JOB_ID = -2) THEN
+	' INNER JOIN GTT_ODI_CAV CAV ON (CAV.ODI_ID  = R.ODI_ID AND CAV.CLS_CD = R.CLS_CD) '
+  WHEN (CAV_REDUCTION_TYPE_REQ = 1 AND JOB_ID > -2) THEN
+	' INNER JOIN ODI_CAV CAV ON (CAV.ODI_ID  = R.ODI_ID AND CAV.CLS_CD = R.CLS_CD) AND JOB_ID = '||JOB_ID|| ''
+	ELSE  
+	''
+ END;
+
+    -- INSERT BDAF FOR COUNTRY/COUNTRY GENERIC YIELD MAPPING
+    --Step:1
+    insertCASQL  :=
+        'INSERT INTO GTT_ODI_SYSTEM_BDAF_FALL_BACK(ODI_ID, CLS_CD, BDAF_AMT,COMP_CD, RANK '|| posCond || ')
+SELECT /*+NO_QUERY_TRANSFORMATION*/ ID,
+  CLS_CD,
+  BDAF_AMT,
+  COMP_CD,
+  2
+  ' || posCond || '
+FROM
+  (SELECT R.ID,
+    R.CLS_CD,
+    BDAF_AMT,
+    COMP_CD,
+    ROW_NUMBER() OVER (PARTITION BY R.ID, R.CLS_CD ' || posCond || ' ORDER BY DEST_RANK, POS_RANK ) AS RANK
+    ' || posCond || '
+  FROM
+    (SELECT /*+USE_HASH(B, O)*/
+      O.ID                           AS ID,
+      B.CLS_CD                       AS CLS_CD,
+      BDAF_AMT                       AS BDAF_AMT,
+      DECODE(B.POB_CD, ''YY'', 2, 1) AS POS_RANK,
+      DEST_RANK
+      ' || posSql || '
+    FROM
+      (SELECT b.ORIG_CD,
+        b.DEST_CD,
+        BDAF_AMT,
+        DOW_ID,
+        B.POB_CD,
+        B.CLS_CD,
+        FIRST_TRVL_BEG_DT,
+        LAST_TRVL_END_DT,
+        G.REPL_ORIG_CITY_CD,
+        G.REPL_DEST_CITY_CD
+      FROM RM_BDAF_ACTUAL_COMPRESSED b
+      INNER JOIN RM_GENERIC_YIELD G
+      ON G.REPL_ORIG_CITY_CD  = b.ORIG_CD
+      AND G.REPL_DEST_CITY_CD = b.DEST_CD
+      WHERE FLT_1_NUM        IS NULL
+      AND FLT_2_NUM          IS NULL
+      AND FLT_3_NUM          IS NULL
+      AND VIA_CD              = ''*''
+      ) B
+    INNER JOIN
+      (SELECT O.ID,
+        O.POS,
+        O.DEST_CNTY,
+        O.ORIGIN_CNTY,
+        O.SCHED_LOC_DEP_DT1,
+        G.REPL_ORIG_CITY_CD,
+        G.REPL_DEST_CITY_CD,
+        DECODE(G.DEST_CNTRY_CD, O.DEST_CNTY, 1, 2) AS DEST_RANK
+      FROM '|| TABLE_NAME ||' O
+      INNER JOIN RM_GENERIC_YIELD G
+      ON G.ORIG_CNTRY_CD         = O.ORIGIN_CNTY
+      AND (G.DEST_CNTRY_CD       = O.DEST_CNTY
+      OR G.DEST_AREA_CD          = O.DEST_AREA)
+	  ' || jobIdCondition || '
+
+      ) O ON O.REPL_ORIG_CITY_CD = b.REPL_ORIG_CITY_CD
+    AND O.REPL_DEST_CITY_CD      = b.REPL_DEST_CITY_CD
+    WHERE (B.POB_CD   ' || posRow || '
+    OR B.POB_CD       =''YY'')
+    AND O.SCHED_LOC_DEP_DT1 BETWEEN B.FIRST_TRVL_BEG_DT AND B.LAST_TRVL_END_DT
+    AND INSTR(B.DOW_ID, TRUNC(SCHED_LOC_DEP_DT1) - TRUNC (SCHED_LOC_DEP_DT1, ''IW'') + 1) > 0 ' || classCodeCondition || '
+    ) R
+  INNER JOIN RM_LH_CLS_NESTING N
+  ON N.CLS_CD = R.CLS_CD
+  )
+WHERE RANK = 1';
+ --DBMS_OUTPUT.put_line(insertCASQL);
+ EXECUTE IMMEDIATE (insertCASQL);
+
+IF(JOB_ID >-2) THEN
+insertCASQL := NULL;
+ insertCASQL := ' MERGE INTO ODI_SYSTEM_BDAF b
+   USING (Select ODI_ID,CLS_CD,BDAF_AMT,COMP_CD ,POB_CD as POS from GTT_ODI_SYSTEM_BDAF_FALL_BACK) f
+   ON (f.ODI_ID = b.ODI_ID and f.CLS_CD = b.CLS_CD and f.POS = b.POS)
+  WHEN NOT MATCHED THEN INSERT (ODI_ID,CLS_CD,BDAF_AMT,COMP_CD,JOB_ID,POS)
+     VALUES (F.ODI_ID,F.CLS_CD,F.BDAF_AMT,F.COMP_CD , ' || JOB_ID || ' , F.POS) ';
+   --  DBMS_OUTPUT.put_line(insertCASQL);
+      EXECUTE IMMEDIATE (insertCASQL);
+      ELSE
+	  insertCASQL := NULL;
+	  
+ insertCASQL := 'MERGE INTO GTT_ODI_SYSTEM_BDAF b
+   USING (Select R.ODI_ID,R.CLS_CD,R.BDAF_AMT,R.COMP_CD from GTT_ODI_SYSTEM_BDAF_FALL_BACK R '||g_noFillupCondition||' ) f
+   ON (f.ODI_ID = b.ODI_ID and f.CLS_CD = b.CLS_CD)
+  WHEN NOT MATCHED THEN INSERT (ODI_ID,CLS_CD,BDAF_AMT,COMP_CD)
+     VALUES (F.ODI_ID,F.CLS_CD,F.BDAF_AMT,F.COMP_CD)';
+	 EXECUTE IMMEDIATE (insertCASQL);
+     END IF;
+     
+
+ prc_RETURN_INFO := 'SUCCESS';
+
+ EXCEPTION
+  WHEN OTHERS THEN
+    prc_RETURN_INFO:= l_sqlcode||' '||l_sqlerrm;
+    l_sqlcode := SQLCODE;
+   l_sqlerrm := SUBSTR(SQLERRM,1,100);
+   l_line_number := substr(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE,
+                           instr(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE,' ',-1,1)+1,
+                           length(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE)
+                          );
+   v_procedure_name := $$PLSQL_UNIT;
+   pkg_error_log.sp_app_error_log('COMPUTE_SYS_BDAF_FALL_BACK',
+                                  l_sqlcode,
+                                  l_sqlerrm,
+                                  v_procedure_name,
+                                  SYS_CONTEXT('USERENV','OS_USER'),
+                                  l_line_number);
+END;
+
+END COMPUTE_SYSTEM_BDAF;
+/

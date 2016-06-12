@@ -1,0 +1,359 @@
+create or replace PACKAGE BODY GENERATE_BDAF_CAV_LCA
+AS
+  /***************************************************************************************************
+  * Define Variables
+  ***************************************************************************************************/
+  -- For Exception handling.
+  l_sqlcode     VARCHAR2(20);
+  l_sqlerrm     VARCHAR2(100);
+  l_line_number VARCHAR2(10);
+  insertCCSQL   VARCHAR2(1500);
+PROCEDURE INSERT_BDAF_TEMP_ODI(
+    directInfluenceList    IN lv_nested_node_tbl,
+    strategicInfluenceList IN lv_nested_node_tbl,
+    P_I_JOB_ID                 IN NUMBER,
+    out_cursor OUT SYS_REFCURSOR)
+AS
+date1 date;
+date2 date;
+BEGIN
+
+
+select to_date(to_char(sysdate,'hh24:mi:ss'),'hh24:mi:ss') into date1  from dual;
+
+  INSERT
+  INTO BDAF_TREE_TEMP_ODI
+    (
+      ID,
+ORIGIN,
+ORIGIN_CTY,
+ORIGIN_CNTY,
+ORIGIN_AREA,
+VIA,
+VIA_CTY,
+VIA_CNTY,
+VIA_AREA,
+VIA1,
+VIA1_CTY,
+VIA1_CNTY,
+VIA1_AREA,
+DESTINATION,
+DEST_CTY,
+DEST_CNTY,
+DEST_AREA,
+POS,
+FLT_NUM1,
+AIRL_CD1,
+OPER_AIRL_CD1,
+PLAN_DEP_TIM1,
+SCHED_LOC_DEP_DT1,
+CO_LEG_ID_1,
+CO_SEG_ID_1,
+ACTUAL_ARR_DT_1,
+FLT_NUM2,
+AIRL_CD2,
+OPER_AIRL_CD2,
+PLAN_DEP_TIM2,
+SCHED_LOC_DEP_DT2,
+CO_LEG_ID_2,
+CO_SEG_ID_2,
+ACTUAL_ARR_DT_2,
+FLT_NUM3,
+AIRL_CD3,
+OPER_AIRL_CD3,
+PLAN_DEP_TIM3,
+SCHED_LOC_DEP_DT3,
+CO_LEG_ID_3,
+CO_SEG_ID_3,
+ACTUAL_ARR_DT_3,
+LEG_COUNT,
+BY_FLT_LEG_IND,
+SNAP_DT,
+BOUND_FLAG,
+OPR_FLT_NUM1,
+OPR_FLT_NUM2,
+OPR_FLT_NUM3,
+PAX_RES_BKG_CD1,
+PAX_RES_BKG_CD2,
+PAX_RES_BKG_CD3,
+FIRST_LEG_DIST,
+SECOND_LEG_DIST,
+THIRD_LEG_DIST,
+DIRECT_DIST,
+POS_IND,
+BASE_ODI,
+INFL_ID,
+INFL_TYPE,
+PARENT_ID,
+PARENT_TYPE,
+CLASS_CODE,
+CURR_INFL_ID,
+CURR_INFL_TYPE,
+CURR_INFL_CLS_CD,
+USER_ID,
+JOB_ID,
+CLS_CD_F1,
+CLS_CD_F2,
+CLS_CD_F3,
+IS_ODI_REQ
+    )
+  SELECT ID,
+ORIGIN,
+ORIGIN_CTY,
+ORIGIN_CNTY,
+ORIGIN_AREA,
+VIA,
+VIA_CTY,
+VIA_CNTY,
+VIA_AREA,
+VIA1,
+VIA1_CTY,
+VIA1_CNTY,
+VIA1_AREA,
+DESTINATION,
+DEST_CTY,
+DEST_CNTY,
+DEST_AREA,
+POS,
+FLT_NUM1,
+AIRL_CD1,
+OPER_AIRL_CD1,
+PLAN_DEP_TIM1,
+SCHED_LOC_DEP_DT1,
+CO_LEG_ID_1,
+CO_SEG_ID_1,
+ACTUAL_ARR_DT_1,
+FLT_NUM2,
+AIRL_CD2,
+OPER_AIRL_CD2,
+PLAN_DEP_TIM2,
+SCHED_LOC_DEP_DT2,
+CO_LEG_ID_2,
+CO_SEG_ID_2,
+ACTUAL_ARR_DT_2,
+FLT_NUM3,
+AIRL_CD3,
+OPER_AIRL_CD3,
+PLAN_DEP_TIM3,
+SCHED_LOC_DEP_DT3,
+CO_LEG_ID_3,
+CO_SEG_ID_3,
+ACTUAL_ARR_DT_3,
+LEG_COUNT,
+BY_FLT_LEG_IND,
+SNAP_DT,
+BOUND_FLAG,
+OPR_FLT_NUM1,
+OPR_FLT_NUM2,
+OPR_FLT_NUM3,
+PAX_RES_BKG_CD1,
+PAX_RES_BKG_CD2,
+PAX_RES_BKG_CD3,
+FIRST_LEG_DIST,
+SECOND_LEG_DIST,
+THIRD_LEG_DIST,
+DIRECT_DIST,
+POS_IND,
+BASE_ODI,
+INFL_ID,
+INFL_TYPE,
+PARENT_ID,
+PARENT_TYPE,
+CLASS_CODE,
+CURR_INFL_ID,
+CURR_INFL_TYPE,
+CURR_INFL_CLS_CD,
+USER_ID,
+JOB_ID,
+CLS_CD_F1,
+CLS_CD_F2,
+CLS_CD_F3,
+IS_ODI_REQ
+  FROM ODI_BDAF_TREE_INFLUENCE
+  WHERE ((INFL_ID IN
+    (SELECT column_value RULE_ID
+    FROM TABLE(CAST (directInfluenceList AS lv_nested_node_tbl))
+    )
+  AND INFL_TYPE = 'DIRECT_INFLUENCE'
+  AND JOB_ID    = P_I_JOB_ID)
+  OR (INFL_ID  IN
+    (SELECT column_value RULE_ID
+    FROM TABLE(CAST (strategicInfluenceList AS lv_nested_node_tbl))
+    )
+  AND INFL_TYPE = 'STRATEGIC_INFLUENCE'
+  AND JOB_ID    = P_I_JOB_ID));
+  
+  select to_date(to_char(sysdate,'hh24:mi:ss'),'hh24:mi:ss') into date2  from dual;
+DBMS_OUTPUT.PUT_LINE(abs(round((date1-date2)*24 * 60 * 60 ))) ;
+insert into taskntime values(to_char(sysdate,'hh24:mi:ss'),'INSERT IN BDAF_TREE_TEMP_ODI',abs(round((date1-date2)*24 * 60 * 60 )));
+
+  select to_date(to_char(sysdate,'hh24:mi:ss'),'hh24:mi:ss') into date1  from dual;
+
+  
+  OPEN out_cursor FOR SELECT INFL_ID,
+  INFL_TYPE,
+  ID,
+  BASE_ODI,
+  POS,
+  FLT_NUM1,
+  AIRL_CD1,
+  OPER_AIRL_CD1,
+  ORIGIN,
+  VIA,
+  VIA1,
+  ORIGIN_CTY,
+  ORIGIN_CNTY,
+  DEST_CNTY,
+  DESTINATION,
+  DEST_CTY,
+  PLAN_DEP_TIM1,
+  SCHED_LOC_DEP_DT1,
+  CO_LEG_ID_1,
+  FLT_NUM2,
+  AIRL_CD2,
+  OPER_AIRL_CD2,
+  CO_LEG_ID_2,
+  FLT_NUM3,
+  AIRL_CD3,
+  OPER_AIRL_CD3,
+  CO_LEG_ID_3,
+  SNAP_DT,
+  OPR_FLT_NUM1,
+  OPR_FLT_NUM2,
+  OPR_FLT_NUM3,
+  CLS_CD_F1,
+  CLS_CD_F2,
+  CLS_CD_F3,
+  LEG_COUNT FROM BDAF_TREE_TEMP_ODI order by IS_ODI_REQ desc;
+    select to_date(to_char(sysdate,'hh24:mi:ss'),'hh24:mi:ss') into date2  from dual;
+DBMS_OUTPUT.PUT_LINE(abs(round((date1-date2)*24 * 60 * 60 ))) ;
+insert into taskntime values(to_char(sysdate,'hh24:mi:ss'),'CURSOR CLOSED',abs(round((date1-date2)*24 * 60 * 60 )));
+
+EXCEPTION
+WHEN OTHERS THEN
+  l_sqlcode     := SQLCODE;
+  l_sqlerrm     := SUBSTR(SQLERRM,1,100);
+  l_line_number := SUBSTR(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE, instr(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE,' ',-1,1)+1, LENGTH(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE) );
+  pkg_error_log.sp_app_error_log('INSERT_BDAF_TEMP_ODI', l_sqlcode, l_sqlerrm, 'INSERT_BDAF_TEMP_ODI : Error during insert', SYS_CONTEXT('USERENV','OS_USER'), l_line_number);
+END INSERT_BDAF_TEMP_ODI;
+PROCEDURE CALL_BDAF_LCA_CAV(
+    SNAP_DATE              IN VARCHAR2,
+    IS_DEVIATION_EVAL      IN VARCHAR2,
+    CLASS_CODES            IN StringArray,
+    TABLE_NAME             IN VARCHAR2,
+    JOB_ID                 IN NUMBER,
+    CAV_REDUCTION_TYPE_REQ IN NUMBER,
+    IS_EXECUTION_DATA      IN NUMBER,
+    removedOdiList    IN lv_nested_node_tbl,
+    rowscount IN NUMBER,
+    prc_RETURN_INFO OUT VARCHAR2)
+AS
+sql_stmt4 VARCHAR(50);
+date1 date;
+date2 date;
+odi_counter number;
+temp_table varchar(50);
+count_val number;
+
+  l_sql  varchar2(8000);
+  TYPE curtype
+  IS
+    REF CURSOR;
+  cur_c curtype;
+  type c_record is table of ODI_BDAF_TREE_INFLUENCE%rowtype; 
+  c_rec c_record;
+
+BEGIN
+
+select to_date(to_char(sysdate,'hh24:mi:ss'),'hh24:mi:ss') into date1  from dual;
+ 
+  insertCCSQL := NULL;
+  DELETE FROM BDAF_TREE_TEMP_ODI
+  WHERE ID IN
+    (SELECT column_value RULE_ID
+    FROM TABLE(CAST (removedOdiList AS lv_nested_node_tbl)));
+select to_date(to_char(sysdate,'hh24:mi:ss'),'hh24:mi:ss') into date2  from dual;
+DBMS_OUTPUT.PUT_LINE(abs(round((date1-date2)*24 * 60 * 60 ))) ;
+insert into taskntime values(to_char(sysdate,'hh24:mi:ss'),'DELETE ODIs',abs(round((date1-date2)*24 * 60 * 60 )));
+
+sql_stmt4 := 'TRUNCATE TABLE BDAF_TREE_TEMP_ODI_SMALL';
+l_sql := 'select * from BDAF_TREE_TEMP_ODI';
+
+OPEN cur_c FOR l_sql;   
+  LOOP
+      FETCH cur_c 
+      BULK COLLECT INTO c_rec 
+      LIMIT 10000;
+      EXECUTE IMMEDIATE sql_stmt4;
+      select to_date(to_char(sysdate,'hh24:mi:ss'),'hh24:mi:ss') into date1  from dual;
+
+      FORALL i IN 1..c_rec.COUNT
+      INSERT /*+ append */ INTO BDAF_TREE_TEMP_ODI_SMALL VALUES c_rec(i);
+            EXIT WHEN c_rec.count = 0;
+
+select to_date(to_char(sysdate,'hh24:mi:ss'),'hh24:mi:ss') into date2  from dual;
+DBMS_OUTPUT.PUT_LINE(abs(round((date1-date2)*24 * 60 * 60 ))) ;
+insert into taskntime values(to_char(sysdate,'hh24:mi:ss'),'INSERT INTO SMALL TABLE',abs(round((date1-date2)*24 * 60 * 60 )));
+
+select count(*) into count_val from BDAF_TREE_TEMP_ODI_SMALL;
+insert into taskntime values(to_char(sysdate,'hh24:mi:ss'),'ODI count in SMALL table',count_val);
+
+temp_table := 'BDAF_TREE_TEMP_ODI_SMALL';
+
+select to_date(to_char(sysdate,'hh24:mi:ss'),'hh24:mi:ss') into date1  from dual;
+
+  COMPUTE_SYSTEM_BDAF.COMPUTE_SYS_BDAF_LEG_CNT_1(CLASS_CODES, temp_table,JOB_ID,CAV_REDUCTION_TYPE_REQ,prc_RETURN_INFO);
+  COMPUTE_SYSTEM_BDAF.COMPUTE_SYS_BDAF_LEG_CNT_2(CLASS_CODES, temp_table,JOB_ID,CAV_REDUCTION_TYPE_REQ,prc_RETURN_INFO);
+  COMPUTE_SYSTEM_BDAF.COMPUTE_SYS_BDAF_LEG_CNT_3(CLASS_CODES, temp_table,JOB_ID,CAV_REDUCTION_TYPE_REQ,prc_RETURN_INFO);
+  COMPUTE_SYSTEM_BDAF.COMPUTE_SYS_BDAF_FALL_BACK(CLASS_CODES, temp_table,JOB_ID,CAV_REDUCTION_TYPE_REQ,prc_RETURN_INFO);
+   select to_date(to_char(sysdate,'hh24:mi:ss'),'hh24:mi:ss') into date2  from dual;
+DBMS_OUTPUT.PUT_LINE(abs(round((date1-date2)*24 * 60 * 60 ))) ;
+insert into taskntime values(to_char(sysdate,'hh24:mi:ss'),'PROC SYSTEM BDAF',abs(round((date1-date2)*24 * 60 * 60 ))); 
+select to_date(to_char(sysdate,'hh24:mi:ss'),'hh24:mi:ss') into date1  from dual;
+  COMPUTE_CAV(SNAP_DATE,CLASS_CODES,temp_table,JOB_ID,CAV_REDUCTION_TYPE_REQ,prc_RETURN_INFO);
+  select to_date(to_char(sysdate,'hh24:mi:ss'),'hh24:mi:ss') into date1  from dual;
+   select to_date(to_char(sysdate,'hh24:mi:ss'),'hh24:mi:ss') into date2  from dual;
+DBMS_OUTPUT.PUT_LINE(abs(round((date1-date2)*24 * 60 * 60 ))) ;
+insert into taskntime values(to_char(sysdate,'hh24:mi:ss'),'PROC CAV',abs(round((date1-date2)*24 * 60 * 60 )));
+select to_date(to_char(sysdate,'hh24:mi:ss'),'hh24:mi:ss') into date1  from dual;
+  COMPUTE_BID_PRICE.COMPUTE_BID_PRICE_ALL_ODI(SNAP_DATE,CLASS_CODES,JOB_ID,'false',prc_RETURN_INFO);
+  COMPUTE_BID_PRICE.COMPUTE_BIDPRICE_FALLBACK_2(SNAP_DATE,CLASS_CODES,JOB_ID,'false',prc_RETURN_INFO);
+  COMPUTE_BID_PRICE.COMPUTE_BIDPRICE_FALLBACK_3(SNAP_DATE,CLASS_CODES,JOB_ID,'false',prc_RETURN_INFO);
+   select to_date(to_char(sysdate,'hh24:mi:ss'),'hh24:mi:ss') into date2  from dual;
+DBMS_OUTPUT.PUT_LINE(abs(round((date1-date2)*24 * 60 * 60 ))) ;
+insert into taskntime values(to_char(sysdate,'hh24:mi:ss'),'PROC BID PRICE',abs(round((date1-date2)*24 * 60 * 60 )));
+select to_date(to_char(sysdate,'hh24:mi:ss'),'hh24:mi:ss') into date1  from dual;
+  COMPUTE_LCA_NESTING_ORDER.COMPUTE_LCA_LEG_CNT_1(SNAP_DATE,IS_DEVIATION_EVAL,CLASS_CODES,temp_table,JOB_ID,IS_EXECUTION_DATA,PRC_RETURN_INFO);
+  COMPUTE_LCA_NESTING_ORDER.COMPUTE_LCA_LEG_CNT_2(SNAP_DATE,IS_DEVIATION_EVAL,CLASS_CODES,temp_table,JOB_ID,IS_EXECUTION_DATA,PRC_RETURN_INFO);
+  COMPUTE_LCA_NESTING_ORDER.COMPUTE_LCA_LEG_CNT_3(SNAP_DATE,IS_DEVIATION_EVAL,CLASS_CODES,temp_table,JOB_ID,IS_EXECUTION_DATA,PRC_RETURN_INFO);
+ select to_date(to_char(sysdate,'hh24:mi:ss'),'hh24:mi:ss') into date2  from dual;
+DBMS_OUTPUT.PUT_LINE(abs(round((date1-date2)*24 * 60 * 60 ))) ;
+insert into taskntime values(to_char(sysdate,'hh24:mi:ss'),'PROC LCA',abs(round((date1-date2)*24 * 60 * 60 )));
+select to_date(to_char(sysdate,'hh24:mi:ss'),'hh24:mi:ss') into date1  from dual;
+
+  insertCCSQL := 'MERGE INTO ODI_SYSTEM_BDAF bdaf using BDAF_TREE_TEMP_ODI_SMALL            
+ODI ON ( ODI.id = bdaf.ODI_ID AND ODI.JOB_ID =bdaf.JOB_ID ) WHEN MATCHED THEN             
+UPDATE SET bdaf.BASE_ODI = ODI.BASE_ODI ';
+  EXECUTE IMMEDIATE (insertCCSQL);
+  insertCCSQL := NULL;
+  insertCCSQL := 'MERGE INTO ODI_LCA lca using BDAF_TREE_TEMP_ODI_SMALL            
+ODI ON ( ODI.id = lca.ODI_ID AND ODI.JOB_ID = lca.JOB_ID ) WHEN MATCHED THEN             
+UPDATE SET lca.POS = ODI.POS, lca.BASE_ODI = ODI.BASE_ODI ';
+  EXECUTE IMMEDIATE (insertCCSQL);
+  
+  END LOOP;
+  CLOSE cur_c;
+   select to_date(to_char(sysdate,'hh24:mi:ss'),'hh24:mi:ss') into date2  from dual;
+DBMS_OUTPUT.PUT_LINE(abs(round((date1-date2)*24 * 60 * 60 ))) ;
+insert into taskntime values(to_char(sysdate,'hh24:mi:ss'),'MERGE CALLS',abs(round((date1-date2)*24 * 60 * 60 )));
+  prc_RETURN_INFO := 'SUCCESS';
+EXCEPTION
+WHEN OTHERS THEN
+  l_sqlcode      := SQLCODE;
+  l_sqlerrm      := SUBSTR(SQLERRM,1,100);
+  prc_RETURN_INFO:= l_sqlcode||' '||l_sqlerrm;
+  l_line_number  := SUBSTR(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE, instr(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE,' ',-1,1)+1, LENGTH(DBMS_UTILITY.FORMAT_ERROR_BACKTRACE) );
+  pkg_error_log.sp_app_error_log('CALL_BDAF_LCA_CAV', l_sqlcode, l_sqlerrm, 'CALL_BDAF_LCA_CAV : Error during insert', SYS_CONTEXT('USERENV','OS_USER'), l_line_number);
+END CALL_BDAF_LCA_CAV;
+END GENERATE_BDAF_CAV_LCA;
+/

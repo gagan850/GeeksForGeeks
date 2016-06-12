@@ -16,11 +16,19 @@ public class stringPerm {
         }
     }
 
+
+
+
     public void swap(char[] arrA, int i, int j) {
         char temp = arrA[i];
         arrA[i] = arrA[j];
         arrA[j] = temp;
     }
+
+
+
+
+
 
     public static void main(String[] args) throws java.lang.Exception {
         // your code goes here

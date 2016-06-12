@@ -1,0 +1,17 @@
+create or replace package pkg_error_log
+as
+  PROCEDURE sp_app_error_log ( p_i_proc_name IN VARCHAR2
+                             , p_i_err_code  IN VARCHAR2
+                             , p_i_err_msg   IN VARCHAR2
+                             , p_i_err_desc  IN VARCHAR2
+                             , p_i_os_user   IN VARCHAR2
+                             , p_i_line_nbr  IN VARCHAR2
+                             );
+                             
+  PROCEDURE sp_error_log ( p_i_proc_name IN VARCHAR2
+                         , p_i_err_code  IN VARCHAR2
+                         , p_i_err_msg   IN VARCHAR2
+                         , p_i_err_desc  IN VARCHAR2
+                         );
+end;
+/
